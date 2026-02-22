@@ -16,6 +16,9 @@ pub fn main() !void {
 
     if (args.options.help) {
         cli.printUsage();
+        for (args.errors.items) |err| {
+            std.debug.print("\n{s}", .{err});
+        }
         return;
     }
 

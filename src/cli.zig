@@ -30,7 +30,7 @@ pub const Args = struct {
     options: Options,
     input_path: []const u8,
     output_path: []const u8,
-    errors: std.ArrayList(u8),
+    errors: std.ArrayList([]const u8),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !Args {
@@ -43,7 +43,7 @@ pub const Args = struct {
             .version = false,
         };
 
-        var errors: std.ArrayList(u8) = .empty;
+        var errors: std.ArrayList([]const u8) = .empty;
         var input_path: ?[]const u8 = null;
         var output_path: ?[]const u8 = null;
 
@@ -62,12 +62,12 @@ pub const Args = struct {
         }
 
         if (input_path == null) {
-            try errors.appendSlice(allocator, "Error: No input file specified");
+            try errors.append(allocator, "Error: No input file specified");
             options.help = true;
         }
 
         if (output_path == null) {
-            try errors.appendSlice(allocator, "Error: No output file specified");
+            try errors.append(allocator, "Error: No output file specified");
             options.help = true;
         }
 
