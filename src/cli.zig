@@ -64,12 +64,12 @@ pub const Args = struct {
         }
 
         if (input_path == null) {
-            try errors.append(allocator, "Error: No input file specified");
+            try errors.append(allocator, "No input file specified");
             options.help = true;
         }
 
         if (output_path == null) {
-            try errors.append(allocator, "Error: No output file specified");
+            try errors.append(allocator, "No output file specified");
             options.help = true;
         }
 
@@ -86,5 +86,10 @@ pub const Args = struct {
         self.allocator.free(self.input_path);
         self.allocator.free(self.output_path);
         self.errors.deinit(self.allocator);
+    }
+
+    pub fn has_path_args(self: *Args) bool {
+        return !std.mem.eql(u8, self.input_path, "") or
+            !std.mem.eql(u8, self.output_path, "");
     }
 };

@@ -16,8 +16,11 @@ pub fn main() !void {
 
     if (args.options.help) {
         cli.printUsage();
-        for (args.errors.items) |err| {
-            std.debug.print("\n{s}", .{err});
+        if (args.has_path_args()) {
+            std.debug.print("\nErrors:\n", .{});
+            for (args.errors.items) |err| {
+                std.debug.print("- {s}\n", .{err});
+            }
         }
         return;
     }
