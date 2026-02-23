@@ -7,6 +7,8 @@ pub fn printUsage() void {
     const usage =
         \\Usage: zic [options]
         \\
+        \\Convert images from one format to another
+        \\
         \\Options:
         \\  -i, --input <path>     Input image file
         \\  -o, --output <path>    Output image file
