@@ -13,6 +13,7 @@ fn endsWith(haystack: []const u8, needle: []const u8) bool {
 pub fn detectFormat(path: []const u8) ?Format {
     if (endsWith(path, ".bmp")) return .bmp_fmt;
     if (endsWith(path, ".png")) return .png_fmt;
-    if (endsWith(path, ".jpg") or endsWith(path, ".jpeg")) return .jpg_fmt;
+    if (endsWith(path, ".jpg") or
+        endsWith(path, ".jpeg")) return .jpg_fmt;
     return null;
 }
