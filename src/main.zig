@@ -27,9 +27,16 @@ pub fn main() !void {
     }
 
     if (args.isBatchMode()) {
-        std.debug.print("Batch mode is not implemented yet.\n", .{});
+        try processor.processImages(allocator, args);
         return;
     }
 
-    processor.processImage(allocator, args);
+    processor.processImage(
+        allocator,
+        args.input_path,
+        args.output_path,
+        args.options,
+    ) catch |err| {
+        std.debug.print("Error processing '{s}': {}\n", .{ args.input_path, err });
+    };
 }
