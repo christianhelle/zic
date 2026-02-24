@@ -17,7 +17,7 @@ pub fn main() !void {
 
     if (args.options.help) {
         cli.printUsage();
-        if (args.has_path_args()) {
+        if (args.hasPathArgs()) {
             std.debug.print("\nErrors:\n", .{});
             for (args.errors.items) |err| {
                 std.debug.print("- {s}\n", .{err});

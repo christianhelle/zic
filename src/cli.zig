@@ -78,19 +78,9 @@ pub const Args = struct {
         }
 
         if (!options.help) {
-            var input_path_is_folder = false;
-            if (input_path) |path| {
-                const stat = try std.fs.cwd().statFile(path);
-                input_path_is_folder = stat.kind == .directory;
-            }
-
-            var output_path_is_folder = false;
-            if (output_path) |path| {
-                const stat = try std.fs.cwd().statFile(path);
-                output_path_is_folder = stat.kind == .directory;
-            }
-
-            options.batch_mode = input_path_is_folder and output_path_is_folder;
+            const input_path_is_folder = isFolderPath(input_path orelse "");
+            const output_path_is_folder = isFolderPath(output_path orelse "");
+            options.batch_mode = input_path_is_folder or output_path_is_folder;
         }
 
         return Args{
@@ -108,12 +98,21 @@ pub const Args = struct {
         self.errors.deinit(self.allocator);
     }
 
-    pub fn has_path_args(self: *Args) bool {
+    pub fn hasPathArgs(self: *Args) bool {
         return !std.mem.eql(u8, self.input_path, "") or
             !std.mem.eql(u8, self.output_path, "");
     }
 
     pub fn isBatchMode(self: *Args) bool {
         return self.options.batch_mode;
+    }
+
+    fn isFolderPath(path: []const u8) bool {
+        const dir = std.fs.cwd();
+        const stat = dir.statFile(path) catch |err| {
+            if (err == error.FileNotFound) return false;
+            return false;
+        };
+        return stat.kind == .directory;
     }
 };
