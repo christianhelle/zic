@@ -10,8 +10,9 @@ pub fn printUsage() void {
         \\Convert images from one format to another
         \\
         \\Options:
-        \\  -i, --input <path>     Input image file
-        \\  -o, --output <path>    Output image file
+        \\  -i, --input <path>     Input image file or folder
+        \\  -o, --output <path>    Output image file or folder
+        \\  -f, --format <format>  Output format (bmp, png, jpg) (default: detected from output file extension)
         \\  -q, --quality <1-100>  JPEG quality (default: 85)
         \\  -h, --help             Show this help
         \\
@@ -23,9 +24,10 @@ pub fn printUsage() void {
 }
 
 pub const Options = struct {
+    format: format.Format = .bmp_fmt,
     quality: u8 = 85,
-    help: bool,
     version: bool,
+    help: bool,
 };
 
 pub const Args = struct {
@@ -64,12 +66,12 @@ pub const Args = struct {
         }
 
         if (input_path == null) {
-            try errors.append(allocator, "No input file specified");
+            try errors.append(allocator, "No input file or folder specified");
             options.help = true;
         }
 
         if (output_path == null) {
-            try errors.append(allocator, "No output file specified");
+            try errors.append(allocator, "No output file or folder specified");
             options.help = true;
         }
 
