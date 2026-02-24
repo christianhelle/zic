@@ -26,6 +26,7 @@ pub fn printUsage() void {
 pub const Options = struct {
     format: format.Format = .bmp_fmt,
     quality: u8 = 85,
+    batch_mode: bool,
     version: bool,
     help: bool,
 };
@@ -45,6 +46,7 @@ pub const Args = struct {
         var options = Options{
             .help = false,
             .version = false,
+            .batch_mode = false,
         };
 
         var errors: std.ArrayList([]const u8) = .empty;
@@ -75,6 +77,22 @@ pub const Args = struct {
             options.help = true;
         }
 
+        if (!options.help) {
+            var input_path_is_folder = false;
+            if (input_path) |path| {
+                const stat = try std.fs.cwd().statFile(path);
+                input_path_is_folder = stat.kind == .directory;
+            }
+
+            var output_path_is_folder = false;
+            if (output_path) |path| {
+                const stat = try std.fs.cwd().statFile(path);
+                output_path_is_folder = stat.kind == .directory;
+            }
+
+            options.batch_mode = input_path_is_folder and output_path_is_folder;
+        }
+
         return Args{
             .options = options,
             .input_path = try allocator.dupe(u8, input_path orelse ""),
@@ -93,5 +111,9 @@ pub const Args = struct {
     pub fn has_path_args(self: *Args) bool {
         return !std.mem.eql(u8, self.input_path, "") or
             !std.mem.eql(u8, self.output_path, "");
+    }
+
+    pub fn isBatchMode(self: *Args) bool {
+        return self.options.batch_mode;
     }
 };
