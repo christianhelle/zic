@@ -1,3 +1,5 @@
+const testing = std.testing;
+
 const std = @import("std");
 
 pub fn openOrMakeDir(output_path: []const u8) !std.fs.Dir {
@@ -37,4 +39,16 @@ pub fn isDir(path: []const u8) bool {
         dir.close();
         return true;
     }
+}
+
+test "isDir returns false for nonexistent path" {
+    try testing.expect(!isDir("nonexistent_dir_xyz"));
+}
+
+test "isDir returns false for file path" {
+    try testing.expect(!isDir("src/main.zig"));
+}
+
+test "isDir returns true for existing directory" {
+    try testing.expect(isDir("src"));
 }

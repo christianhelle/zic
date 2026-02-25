@@ -127,7 +127,6 @@ pub const Args = struct {
 // ─── Tests ───
 
 const testing = std.testing;
-
 test "isAnyOf matches short arg" {
     try testing.expect(isAnyOf("-i", "-i", "--input"));
 }
@@ -251,18 +250,6 @@ test "Args isBatchMode false by default" {
         .allocator = testing.allocator,
     };
     try testing.expect(!args.isBatchMode());
-}
-
-test "isFolderPath returns false for nonexistent path" {
-    try testing.expect(!Args.isDir("nonexistent_dir_xyz"));
-}
-
-test "isFolderPath returns false for file path" {
-    try testing.expect(!Args.isDir("src/main.zig"));
-}
-
-test "isFolderPath returns true for existing directory" {
-    try testing.expect(Args.isDir("src"));
 }
 
 test "isAnyOf with all flags" {
