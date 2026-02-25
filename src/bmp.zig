@@ -166,3 +166,328 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap) ![]u8 {
 
     return out;
 }
+
+// ─── Tests ───
+
+const testing = std.testing;
+
+test "readU16 little endian" {
+    const data = [_]u8{ 0x34, 0x12 };
+    try testing.expectEqual(@as(u16, 0x1234), readU16(&data, 0));
+}
+
+test "readU32 little endian" {
+    const data = [_]u8{ 0x78, 0x56, 0x34, 0x12 };
+    try testing.expectEqual(@as(u32, 0x12345678), readU32(&data, 0));
+}
+
+test "readI32 positive" {
+    const data = [_]u8{ 0x01, 0x00, 0x00, 0x00 };
+    try testing.expectEqual(@as(i32, 1), readI32(&data, 0));
+}
+
+test "readI32 negative" {
+    // -1 in little endian = 0xFF 0xFF 0xFF 0xFF
+    const data = [_]u8{ 0xFF, 0xFF, 0xFF, 0xFF };
+    try testing.expectEqual(@as(i32, -1), readI32(&data, 0));
+}
+
+test "writeU16 and readU16 roundtrip" {
+    var buf: [2]u8 = undefined;
+    writeU16(&buf, 0, 0xABCD);
+    try testing.expectEqual(@as(u16, 0xABCD), readU16(&buf, 0));
+}
+
+test "writeU32 and readU32 roundtrip" {
+    var buf: [4]u8 = undefined;
+    writeU32(&buf, 0, 0xDEADBEEF);
+    try testing.expectEqual(@as(u32, 0xDEADBEEF), readU32(&buf, 0));
+}
+
+test "writeI32 and readI32 roundtrip positive" {
+    var buf: [4]u8 = undefined;
+    writeI32(&buf, 0, 42);
+    try testing.expectEqual(@as(i32, 42), readI32(&buf, 0));
+}
+
+test "writeI32 and readI32 roundtrip negative" {
+    var buf: [4]u8 = undefined;
+    writeI32(&buf, 0, -100);
+    try testing.expectEqual(@as(i32, -100), readI32(&buf, 0));
+}
+
+test "decode rejects data shorter than minimum" {
+    const data = [_]u8{ 'B', 'M' } ++ [_]u8{0} ** 10;
+    try testing.expectError(error.InvalidBmp, decode(testing.allocator, &data));
+}
+
+test "decode rejects invalid signature" {
+    var data = [_]u8{0} ** 60;
+    data[0] = 'X';
+    data[1] = 'Y';
+    try testing.expectError(error.InvalidBmp, decode(testing.allocator, &data));
+}
+
+test "decode rejects unsupported compression" {
+    // Build a minimal BMP header with compression != 0
+    var data = [_]u8{0} ** 70;
+    data[0] = 'B';
+    data[1] = 'M';
+    writeU32(&data, bmp_data_offset_pos, bmp_min_file_size);
+    writeI32(&data, bmp_width_offset, 1);
+    writeI32(&data, bmp_height_offset, 1);
+    writeU16(&data, bmp_bpp_offset, bpp_24);
+    writeU32(&data, bmp_compression_offset, 1); // BI_RLE8, unsupported
+    try testing.expectError(error.UnsupportedCompression, decode(testing.allocator, &data));
+}
+
+test "decode rejects unsupported bit depth" {
+    var data = [_]u8{0} ** 70;
+    data[0] = 'B';
+    data[1] = 'M';
+    writeU32(&data, bmp_data_offset_pos, bmp_min_file_size);
+    writeI32(&data, bmp_width_offset, 1);
+    writeI32(&data, bmp_height_offset, 1);
+    writeU16(&data, bmp_bpp_offset, 16); // unsupported
+    writeU32(&data, bmp_compression_offset, bi_rgb);
+    try testing.expectError(error.UnsupportedBitDepth, decode(testing.allocator, &data));
+}
+
+test "decode rejects zero width" {
+    var data = [_]u8{0} ** 70;
+    data[0] = 'B';
+    data[1] = 'M';
+    writeU32(&data, bmp_data_offset_pos, bmp_min_file_size);
+    writeI32(&data, bmp_width_offset, 0);
+    writeI32(&data, bmp_height_offset, 1);
+    writeU16(&data, bmp_bpp_offset, bpp_24);
+    writeU32(&data, bmp_compression_offset, bi_rgb);
+    try testing.expectError(error.InvalidDimensions, decode(testing.allocator, &data));
+}
+
+test "decode rejects negative width" {
+    var data = [_]u8{0} ** 70;
+    data[0] = 'B';
+    data[1] = 'M';
+    writeU32(&data, bmp_data_offset_pos, bmp_min_file_size);
+    writeI32(&data, bmp_width_offset, -1);
+    writeI32(&data, bmp_height_offset, 1);
+    writeU16(&data, bmp_bpp_offset, bpp_24);
+    writeU32(&data, bmp_compression_offset, bi_rgb);
+    try testing.expectError(error.InvalidDimensions, decode(testing.allocator, &data));
+}
+
+test "encode produces valid BMP header" {
+    var bmp = try Bitmap.init(testing.allocator, 2, 2);
+    defer bmp.deinit();
+
+    bmp.setPixel(0, 0, Color.rgb(255, 0, 0));
+    bmp.setPixel(1, 0, Color.rgb(0, 255, 0));
+    bmp.setPixel(0, 1, Color.rgb(0, 0, 255));
+    bmp.setPixel(1, 1, Color.rgb(255, 255, 255));
+
+    const data = try encode(testing.allocator, &bmp);
+    defer testing.allocator.free(data);
+
+    // Verify signature
+    try testing.expectEqual(@as(u8, 'B'), data[0]);
+    try testing.expectEqual(@as(u8, 'M'), data[1]);
+
+    // Verify dimensions
+    try testing.expectEqual(@as(i32, 2), readI32(data, bmp_width_offset));
+    try testing.expectEqual(@as(i32, 2), readI32(data, bmp_height_offset));
+
+    // Verify bpp
+    try testing.expectEqual(@as(u16, bpp_24), readU16(data, bmp_bpp_offset));
+
+    // Verify data offset
+    try testing.expectEqual(bmp_min_file_size, readU32(data, bmp_data_offset_pos));
+}
+
+test "BMP encode-decode roundtrip 2x2" {
+    var bmp = try Bitmap.init(testing.allocator, 2, 2);
+    defer bmp.deinit();
+
+    bmp.setPixel(0, 0, Color.rgb(255, 0, 0));
+    bmp.setPixel(1, 0, Color.rgb(0, 255, 0));
+    bmp.setPixel(0, 1, Color.rgb(0, 0, 255));
+    bmp.setPixel(1, 1, Color.rgb(128, 64, 32));
+
+    const data = try encode(testing.allocator, &bmp);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    try testing.expectEqual(@as(u32, 2), decoded.width);
+    try testing.expectEqual(@as(u32, 2), decoded.height);
+
+    // Check pixel values (alpha is 255 from 24-bit decode)
+    const p00 = decoded.getPixel(0, 0);
+    try testing.expectEqual(@as(u8, 255), p00.r);
+    try testing.expectEqual(@as(u8, 0), p00.g);
+    try testing.expectEqual(@as(u8, 0), p00.b);
+
+    const p10 = decoded.getPixel(1, 0);
+    try testing.expectEqual(@as(u8, 0), p10.r);
+    try testing.expectEqual(@as(u8, 255), p10.g);
+
+    const p01 = decoded.getPixel(0, 1);
+    try testing.expectEqual(@as(u8, 0), p01.r);
+    try testing.expectEqual(@as(u8, 0), p01.g);
+    try testing.expectEqual(@as(u8, 255), p01.b);
+
+    const p11 = decoded.getPixel(1, 1);
+    try testing.expectEqual(@as(u8, 128), p11.r);
+    try testing.expectEqual(@as(u8, 64), p11.g);
+    try testing.expectEqual(@as(u8, 32), p11.b);
+}
+
+test "BMP encode-decode roundtrip 1x1" {
+    var bmp = try Bitmap.init(testing.allocator, 1, 1);
+    defer bmp.deinit();
+
+    bmp.setPixel(0, 0, Color.rgb(42, 84, 168));
+
+    const data = try encode(testing.allocator, &bmp);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    try testing.expectEqual(@as(u32, 1), decoded.width);
+    try testing.expectEqual(@as(u32, 1), decoded.height);
+    const p = decoded.getPixel(0, 0);
+    try testing.expectEqual(@as(u8, 42), p.r);
+    try testing.expectEqual(@as(u8, 84), p.g);
+    try testing.expectEqual(@as(u8, 168), p.b);
+}
+
+test "BMP encode-decode roundtrip odd width" {
+    // Odd width exercises row padding
+    var bmp = try Bitmap.init(testing.allocator, 3, 2);
+    defer bmp.deinit();
+
+    bmp.setPixel(0, 0, Color.rgb(10, 20, 30));
+    bmp.setPixel(1, 0, Color.rgb(40, 50, 60));
+    bmp.setPixel(2, 0, Color.rgb(70, 80, 90));
+    bmp.setPixel(0, 1, Color.rgb(100, 110, 120));
+    bmp.setPixel(1, 1, Color.rgb(130, 140, 150));
+    bmp.setPixel(2, 1, Color.rgb(160, 170, 180));
+
+    const data = try encode(testing.allocator, &bmp);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    try testing.expectEqual(@as(u32, 3), decoded.width);
+    try testing.expectEqual(@as(u32, 2), decoded.height);
+
+    try testing.expectEqual(@as(u8, 10), decoded.getPixel(0, 0).r);
+    try testing.expectEqual(@as(u8, 70), decoded.getPixel(2, 0).r);
+    try testing.expectEqual(@as(u8, 160), decoded.getPixel(2, 1).r);
+}
+
+test "BMP encode-decode roundtrip larger image" {
+    const w: u32 = 16;
+    const h: u32 = 16;
+    var bmp = try Bitmap.init(testing.allocator, w, h);
+    defer bmp.deinit();
+
+    // Fill with gradient
+    var y: u32 = 0;
+    while (y < h) : (y += 1) {
+        var x: u32 = 0;
+        while (x < w) : (x += 1) {
+            bmp.setPixel(x, y, Color.rgb(
+                @truncate(x * 16),
+                @truncate(y * 16),
+                @truncate((x + y) * 8),
+            ));
+        }
+    }
+
+    const data = try encode(testing.allocator, &bmp);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    try testing.expectEqual(w, decoded.width);
+    try testing.expectEqual(h, decoded.height);
+
+    // Spot check some pixels
+    try testing.expectEqual(@as(u8, 0), decoded.getPixel(0, 0).r);
+    try testing.expectEqual(@as(u8, 0), decoded.getPixel(0, 0).g);
+    try testing.expectEqual(@as(u8, 128), decoded.getPixel(8, 8).r);
+    try testing.expectEqual(@as(u8, 128), decoded.getPixel(8, 8).g);
+}
+
+test "BMP encode file size" {
+    var bmp = try Bitmap.init(testing.allocator, 4, 4);
+    defer bmp.deinit();
+
+    const data = try encode(testing.allocator, &bmp);
+    defer testing.allocator.free(data);
+
+    // Row stride for width=4, 24bpp: 4*3=12 bytes, already 4-byte aligned
+    const expected_pixel_size: u32 = 12 * 4;
+    const expected_file_size = bmp_min_file_size + expected_pixel_size;
+    try testing.expectEqual(expected_file_size, readU32(data, 2));
+    try testing.expectEqual(expected_file_size, @as(u32, @intCast(data.len)));
+}
+
+test "BMP decode top-down image" {
+    // Manually construct a top-down BMP (negative height)
+    const width: u32 = 2;
+    const height: u32 = 2;
+    const bpp: u16 = 24;
+    const bytes_per_pixel: u32 = 3;
+    const row_stride = ((width * bytes_per_pixel + 3) / 4) * 4; // 8 bytes
+    const pixel_data_size = row_stride * height;
+    const file_size = bmp_min_file_size + pixel_data_size;
+
+    var data: [bmp_min_file_size + 16]u8 = undefined;
+    @memset(&data, 0);
+    data[0] = 'B';
+    data[1] = 'M';
+    writeU32(&data, 2, file_size);
+    writeU32(&data, bmp_data_offset_pos, bmp_min_file_size);
+    writeU32(&data, bmp_header_size, bmp_info_header_size);
+    writeI32(&data, bmp_width_offset, @intCast(width));
+    writeI32(&data, bmp_height_offset, -@as(i32, @intCast(height))); // top-down
+    writeU16(&data, bmp_planes_offset, 1);
+    writeU16(&data, bmp_bpp_offset, bpp);
+    writeU32(&data, bmp_compression_offset, bi_rgb);
+    writeU32(&data, bmp_image_size_offset, pixel_data_size);
+
+    // Row 0: Red, Green (BGR order)
+    const off0 = bmp_min_file_size;
+    data[off0] = 0;
+    data[off0 + 1] = 0;
+    data[off0 + 2] = 255; // Red pixel (B=0,G=0,R=255)
+    data[off0 + 3] = 0;
+    data[off0 + 4] = 255;
+    data[off0 + 5] = 0; // Green pixel (B=0,G=255,R=0)
+    // Row 1: Blue, White
+    const off1 = off0 + row_stride;
+    data[off1] = 255;
+    data[off1 + 1] = 0;
+    data[off1 + 2] = 0; // Blue pixel
+    data[off1 + 3] = 255;
+    data[off1 + 4] = 255;
+    data[off1 + 5] = 255; // White pixel
+
+    var decoded = try decode(testing.allocator, &data);
+    defer decoded.deinit();
+
+    try testing.expectEqual(@as(u32, 2), decoded.width);
+    try testing.expectEqual(@as(u32, 2), decoded.height);
+
+    // Top-down: row 0 is first
+    try testing.expectEqual(@as(u8, 255), decoded.getPixel(0, 0).r);
+    try testing.expectEqual(@as(u8, 0), decoded.getPixel(0, 0).g);
+    try testing.expectEqual(@as(u8, 255), decoded.getPixel(1, 0).g);
+    try testing.expectEqual(@as(u8, 255), decoded.getPixel(0, 1).b);
+}
