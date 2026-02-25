@@ -4,7 +4,59 @@ const Color = bitmap.Color;
 const Bitmap = bitmap.Bitmap;
 const ByteList = std.array_list.Managed(u8);
 
-const png_signature= [_]u8{ 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+// PNG file signature: 8 bytes identifying a valid PNG file
+// The signature encodes: high-bit check, "PNG", DOS line ending, EOF, Unix line ending
+// https://www.w3.org/TR/png/#5PNG-file-signature
+const png_signature = [_]u8{ 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+
+// PNG IHDR field values
+// https://www.w3.org/TR/png/#11IHDR
+const png_bit_depth_8: u8 = 8; // 8 bits per channel
+const png_color_type_rgb: u8 = 2; // RGB truecolor
+const png_color_type_rgba: u8 = 6; // RGBA truecolor + alpha
+const png_compression_deflate: u8 = 0; // Deflate/inflate compression
+const png_filter_adaptive: u8 = 0; // Adaptive filtering with five basic filter types
+const png_interlace_none: u8 = 0; // No interlacing
+
+// IHDR chunk length in bytes: width(4) + height(4) + bitDepth(1) + colorType(1)
+//   + compression(1) + filter(1) + interlace(1)
+const ihdr_data_length: u32 = 13;
+
+// PNG filter types applied per-row before compression
+// https://www.w3.org/TR/png/#9Filter-types
+const png_filter_none: u8 = 0;
+const png_filter_sub: u8 = 1;
+const png_filter_up: u8 = 2;
+const png_filter_average: u8 = 3;
+const png_filter_paeth: u8 = 4;
+
+// CRC-32/ISO-3309 polynomial in reversed (LSB-first) representation
+// https://www.w3.org/TR/png/#D-CRCAppendix
+const crc32_polynomial: u32 = 0xEDB88320;
+
+// CRC-32 initial and final XOR value
+const crc32_init: u32 = 0xFFFFFFFF;
+
+// Zlib header bytes for deflate with 32K window, compression level 0 (stored)
+// CMF = 0x78: CM=8 (deflate), CINFO=7 (32K window)
+// FLG = 0x01: FCHECK so CMF*256+FLG is a multiple of 31, FLEVEL=0
+// https://www.rfc-editor.org/rfc/rfc1950#section-2.2
+const zlib_header = [_]u8{ 0x78, 0x01 };
+
+// Maximum deflate stored block payload size (2^16 - 1 bytes)
+// https://www.rfc-editor.org/rfc/rfc1951#section-3.2.4
+const deflate_max_stored_block: usize = 65535;
+
+// Adler-32 modulus: largest prime smaller than 2^16
+// https://www.rfc-editor.org/rfc/rfc1950#section-8.2
+const adler32_mod: u32 = 65521;
+
+// Default alpha value for RGB pixels (fully opaque)
+const default_alpha: u8 = 255;
+
+// Number of channels per color type
+const channels_rgb: u32 = 3;
+const channels_rgba: u32 = 4;
 
 fn readU32BE(data: []const u8, offset: usize) u32 {
     return (@as(u32, data[offset]) << 24) |
@@ -21,6 +73,7 @@ fn writeU32BE(buf: []u8, offset: usize, value: u32) void {
 }
 
 // CRC32 lookup table (PNG uses CRC-32/ISO-3309)
+// https://www.w3.org/TR/png/#D-CRCAppendix
 const crc_table: [256]u32 = blk: {
     @setEvalBranchQuota(3000);
     var table: [256]u32 = undefined;
@@ -28,7 +81,7 @@ const crc_table: [256]u32 = blk: {
         var c: u32 = @intCast(n);
         for (0..8) |_| {
             if (c & 1 != 0) {
-                c = 0xEDB88320 ^ (c >> 1);
+                c = crc32_polynomial ^ (c >> 1);
             } else {
                 c = c >> 1;
             }
@@ -56,6 +109,10 @@ fn paeth(a: u8, b: u8, c: u8) u8 {
     return c;
 }
 
+/// Decodes a PNG (Portable Network Graphics) image into a Bitmap.
+/// Supports 8-bit RGB and RGBA color types with adaptive filtering (no interlacing).
+/// https://www.w3.org/TR/png/
+/// https://www.rfc-editor.org/rfc/rfc2083
 pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
     if (data.len < 8) return error.InvalidPng;
     if (!std.mem.eql(u8, data[0..8], &png_signature)) return error.InvalidPng;
@@ -79,14 +136,14 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
         const chunk_data = data[chunk_data_start..chunk_data_end];
 
         if (std.mem.eql(u8, chunk_type[0..4], "IHDR")) {
-            if (chunk_len < 13) return error.InvalidPng;
+            if (chunk_len < ihdr_data_length) return error.InvalidPng;
             width = readU32BE(chunk_data, 0);
             height = readU32BE(chunk_data, 4);
             bit_depth = chunk_data[8];
             color_type = chunk_data[9];
-            if (bit_depth != 8) return error.UnsupportedBitDepth;
-            if (color_type != 2 and color_type != 6) return error.UnsupportedColorType;
-            if (chunk_data[12] != 0) return error.UnsupportedInterlace;
+            if (bit_depth != png_bit_depth_8) return error.UnsupportedBitDepth;
+            if (color_type != png_color_type_rgb and color_type != png_color_type_rgba) return error.UnsupportedColorType;
+            if (chunk_data[12] != png_interlace_none) return error.UnsupportedInterlace;
         } else if (std.mem.eql(u8, chunk_type[0..4], "IDAT")) {
             try idat_list.appendSlice(chunk_data);
         } else if (std.mem.eql(u8, chunk_type[0..4], "IEND")) {
@@ -98,7 +155,7 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
 
     if (width == 0 or height == 0) return error.InvalidPng;
 
-    const channels: u32 = if (color_type == 6) 4 else 3;
+    const channels: u32 = if (color_type == png_color_type_rgba) channels_rgba else channels_rgb;
     const raw_row_len = 1 + width * channels;
 
     // Decompress zlib data using std.compress.flate
@@ -123,27 +180,27 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
         const filtered = raw[row_start + 1 .. row_start + raw_row_len];
 
         switch (filter_type) {
-            0 => {}, // None
-            1 => { // Sub
+            png_filter_none => {},
+            png_filter_sub => {
                 for (channels..filtered.len) |i| {
                     filtered[i] +%= filtered[i - channels];
                 }
             },
-            2 => { // Up
+            png_filter_up => {
                 if (prev_row) |pr| {
                     for (0..filtered.len) |i| {
                         filtered[i] +%= pr[i];
                     }
                 }
             },
-            3 => { // Average
+            png_filter_average => {
                 for (0..filtered.len) |i| {
                     const left: u16 = if (i >= channels) filtered[i - channels] else 0;
                     const above: u16 = if (prev_row) |pr| pr[i] else 0;
                     filtered[i] +%= @truncate((left + above) / 2);
                 }
             },
-            4 => { // Paeth
+            png_filter_paeth => {
                 for (0..filtered.len) |i| {
                     const left: u8 = if (i >= channels) filtered[i - channels] else 0;
                     const above: u8 = if (prev_row) |pr| pr[i] else 0;
@@ -165,7 +222,7 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
             const r = filtered[px];
             const g = filtered[px + 1];
             const b = filtered[px + 2];
-            const a: u8 = if (channels == 4) filtered[px + 3] else 255;
+            const a: u8 = if (channels == channels_rgba) filtered[px + 3] else default_alpha;
             bmp.setPixel(x, y, Color.rgba(r, g, b, a));
         }
     }
@@ -173,6 +230,10 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
     return bmp;
 }
 
+/// Encodes a Bitmap into a PNG (Portable Network Graphics) image.
+/// Outputs an 8-bit RGBA PNG with no filtering and zlib stored blocks (no compression).
+/// https://www.w3.org/TR/png/
+/// https://www.rfc-editor.org/rfc/rfc2083
 pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap) ![]u8 {
     var output = ByteList.init(allocator);
     errdefer output.deinit();
@@ -181,18 +242,18 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap) ![]u8 {
     try output.appendSlice(&png_signature);
 
     // IHDR chunk
-    var ihdr: [13]u8 = undefined;
+    var ihdr: [ihdr_data_length]u8 = undefined;
     writeU32BE(&ihdr, 0, bmp.width);
     writeU32BE(&ihdr, 4, bmp.height);
-    ihdr[8] = 8; // bit depth
-    ihdr[9] = 6; // RGBA
-    ihdr[10] = 0; // compression
-    ihdr[11] = 0; // filter
-    ihdr[12] = 0; // interlace
+    ihdr[8] = png_bit_depth_8;
+    ihdr[9] = png_color_type_rgba;
+    ihdr[10] = png_compression_deflate;
+    ihdr[11] = png_filter_adaptive;
+    ihdr[12] = png_interlace_none;
     try writeChunk(&output, "IHDR", &ihdr);
 
-    // Prepare raw pixel data with filter type 0 (None) per row
-    const channels: u32 = 4;
+    // Prepare raw pixel data with filter type None per row
+    const channels: u32 = channels_rgba;
     const raw_row_len = 1 + bmp.width * channels;
     const raw_size = raw_row_len * bmp.height;
     var raw = try allocator.alloc(u8, raw_size);
@@ -201,7 +262,7 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap) ![]u8 {
     var y: u32 = 0;
     while (y < bmp.height) : (y += 1) {
         const row_start = @as(usize, y) * raw_row_len;
-        raw[row_start] = 0; // filter: None
+        raw[row_start] = png_filter_none;
         var x: u32 = 0;
         while (x < bmp.width) : (x += 1) {
             const color = bmp.getPixel(x, y);
@@ -227,21 +288,19 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap) ![]u8 {
 }
 
 fn zlibCompressStored(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    const max_block: usize = 65535;
-    const num_blocks = if (input.len == 0) 1 else (input.len + max_block - 1) / max_block;
+    const num_blocks = if (input.len == 0) 1 else (input.len + deflate_max_stored_block - 1) / deflate_max_stored_block;
     const out_size = 2 + num_blocks * 5 + input.len + 4;
 
     var out = try ByteList.initCapacity(allocator, out_size);
     errdefer out.deinit();
 
-    // Zlib header: CMF=0x78 (deflate, 32K window), FLG=0x01 (level 0, no dict)
-    try out.appendSlice(&[_]u8{ 0x78, 0x01 });
+    try out.appendSlice(&zlib_header);
 
     // Deflate stored blocks
     var offset: usize = 0;
     while (true) {
         const remaining = input.len - offset;
-        const block_len = @min(remaining, max_block);
+        const block_len = @min(remaining, deflate_max_stored_block);
         const is_final: u8 = if (offset + block_len >= input.len) 1 else 0;
         const len: u16 = @intCast(block_len);
 
@@ -261,8 +320,8 @@ fn zlibCompressStored(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     var s1: u32 = 1;
     var s2: u32 = 0;
     for (input) |byte| {
-        s1 = (s1 + byte) % 65521;
-        s2 = (s2 + s1) % 65521;
+        s1 = (s1 + byte) % adler32_mod;
+        s2 = (s2 + s1) % adler32_mod;
     }
     const adler = (s2 << 16) | s1;
     try out.append(@truncate(adler >> 24));
@@ -281,9 +340,9 @@ fn writeChunk(output: *ByteList, chunk_type: *const [4]u8, data: []const u8) !vo
     try output.appendSlice(data);
 
     // CRC over type + data
-    var crc_val = crc32(0xFFFFFFFF, chunk_type);
+    var crc_val = crc32(crc32_init, chunk_type);
     crc_val = crc32(crc_val, data);
-    crc_val ^= 0xFFFFFFFF;
+    crc_val ^= crc32_init;
     var crc_buf: [4]u8 = undefined;
     writeU32BE(&crc_buf, 0, crc_val);
     try output.appendSlice(&crc_buf);

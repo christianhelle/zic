@@ -4,7 +4,97 @@ const Color = bitmap.Color;
 const Bitmap = bitmap.Bitmap;
 const ByteList = std.array_list.Managed(u8);
 
-// Zigzag scan order: maps zigzag position to natural 8x8 index
+// ─── JPEG Marker Codes ───
+// JPEG markers are two-byte sequences starting with 0xFF followed by a marker type byte.
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Table B.1)
+// https://en.wikipedia.org/wiki/JPEG#Syntax_and_structure
+
+/// Marker prefix byte: all JPEG markers begin with 0xFF
+const marker_prefix: u8 = 0xFF;
+
+/// Start Of Image: marks the beginning of a JPEG file
+const marker_soi: u16 = 0xFFD8;
+
+/// End Of Image: marks the end of a JPEG file
+const marker_eoi = [_]u8{ 0xFF, 0xD9 };
+
+/// SOF0 (Start Of Frame, Baseline DCT): defines image dimensions, components, sampling
+const marker_sof0: u8 = 0xC0;
+
+/// DHT (Define Huffman Table): embeds a Huffman coding table
+const marker_dht: u8 = 0xC4;
+
+/// DQT (Define Quantization Table): embeds a quantization table
+const marker_dqt: u8 = 0xDB;
+
+/// DRI (Define Restart Interval): sets the MCU restart interval
+const marker_dri: u8 = 0xDD;
+
+/// SOS (Start Of Scan): begins the entropy-coded scan data
+const marker_sos: u8 = 0xDA;
+
+/// EOI marker type byte
+const marker_eoi_type: u8 = 0xD9;
+
+/// Restart marker range: RST0 (0xD0) through RST7 (0xD7)
+const marker_rst0: u8 = 0xD0;
+const marker_rst7: u8 = 0xD7;
+
+/// APP0 (JFIF header) marker bytes
+const marker_app0 = [_]u8{ 0xFF, 0xE0 };
+
+/// Byte stuffing: 0xFF followed by 0x00 represents a literal 0xFF data byte
+/// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section B.1.1.5)
+const byte_stuffing_suffix: u8 = 0x00;
+
+// ─── JPEG Constants ───
+
+/// JFIF APP0 segment: identifies JPEG File Interchange Format
+/// https://en.wikipedia.org/wiki/JPEG_File_Interchange_Format
+const jfif_app0_data = [_]u8{
+    0x00, 0x10, // length = 16
+    0x4A, 0x46, 0x49, 0x46, 0x00, // "JFIF\0"
+    0x01, 0x01, // version 1.1
+    0x00, // aspect ratio units (0 = no units)
+    0x00, 0x01, // X density = 1
+    0x00, 0x01, // Y density = 1
+    0x00, 0x00, // no thumbnail
+};
+
+/// Baseline DCT sample precision: 8 bits per component
+const jpeg_precision: u8 = 8;
+
+/// Number of components in a YCbCr image
+const jpeg_num_components: u8 = 3;
+
+/// MCU block size in pixels for 4:2:0 subsampling (2x2 blocks of 8x8)
+const mcu_size_420: u32 = 16;
+
+/// DCT block size
+const dct_block_size: u32 = 8;
+
+/// DC level shift applied during IDCT (subtract 128 before FDCT, add 128 after IDCT)
+/// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section A.3.1)
+const dc_level_shift: f64 = 128.0;
+
+/// End-Of-Block (EOB) AC Huffman symbol: all remaining AC coefficients are zero
+/// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Table F.1)
+const ac_eob_symbol: u8 = 0x00;
+
+/// Zero Run Length (ZRL) AC symbol: run of 16 zero coefficients
+/// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Table F.1)
+const ac_zrl_symbol: u8 = 0xF0;
+
+/// Maximum AC run length encoded in a single ZRL symbol
+const ac_zrl_run: u8 = 16;
+
+/// Number of DCT coefficients per 8×8 block
+const block_coeff_count: usize = 64;
+
+// ─── Zigzag Scan Order ───
+// Maps zigzag position to natural (row-major) 8×8 index.
+// JPEG encodes DCT coefficients in zigzag order from low to high frequency.
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Figure A.6)
 const zigzag_order = [64]u8{
     0,  1,  8,  16, 9,  2,  3,  10,
     17, 24, 32, 25, 18, 11, 4,  5,
@@ -16,7 +106,8 @@ const zigzag_order = [64]u8{
     53, 60, 61, 54, 47, 55, 62, 63,
 };
 
-// Inverse zigzag: maps natural 8x8 index to zigzag position
+// Inverse zigzag: maps natural 8×8 index to zigzag position
+// Used during encoding to reorder quantized DCT coefficients into zigzag order
 const zigzag_inverse = blk: {
     var table: [64]u8 = undefined;
     for (0..64) |i| {
@@ -25,7 +116,10 @@ const zigzag_inverse = blk: {
     break :blk table;
 };
 
-// Standard luminance quantization table (JPEG Annex K, Table K.1)
+// Standard luminance quantization table (ITU-T T.81 Annex K, Table K.1)
+// These values are perceptually tuned for the human visual system's sensitivity
+// to luminance spatial frequencies.
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section K.1)
 const std_lum_qt = [64]u8{
     16, 11, 10, 16, 24,  40,  51,  61,
     12, 12, 14, 19, 26,  58,  60,  55,
@@ -37,7 +131,10 @@ const std_lum_qt = [64]u8{
     72, 92, 95, 98, 112, 100, 103, 99,
 };
 
-// Standard chrominance quantization table (JPEG Annex K, Table K.2)
+// Standard chrominance quantization table (ITU-T T.81 Annex K, Table K.2)
+// Chrominance tables have higher quantization values (more aggressive compression)
+// because human vision is less sensitive to color detail than luminance detail.
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section K.1)
 const std_chrom_qt = [64]u8{
     17, 18, 24, 47, 99, 99, 99, 99,
     18, 21, 26, 66, 99, 99, 99, 99,
@@ -49,16 +146,20 @@ const std_chrom_qt = [64]u8{
     99, 99, 99, 99, 99, 99, 99, 99,
 };
 
-// Standard Huffman table specifications (JPEG Annex K)
-// Luminance DC (Table K.3)
+// Standard Huffman table specifications (ITU-T T.81 Annex K)
+// Each table is defined by BITS (number of codes per bit length 1-16)
+// and HUFFVAL (symbol values sorted by code length).
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section K.3)
+
+// Luminance DC (Table K.3): codes for DC difference categories 0-11
 const std_dc_lum_bits = [16]u8{ 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
 const std_dc_lum_vals = [12]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 
-// Chrominance DC (Table K.4)
+// Chrominance DC (Table K.4): codes for DC difference categories 0-11
 const std_dc_chrom_bits = [16]u8{ 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0 };
 const std_dc_chrom_vals = [12]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 
-// Luminance AC (Table K.5)
+// Luminance AC (Table K.5): codes for run/size AC coefficient pairs
 const std_ac_lum_bits = [16]u8{ 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7D };
 const std_ac_lum_vals = [162]u8{
     0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
@@ -84,7 +185,7 @@ const std_ac_lum_vals = [162]u8{
     0xF9, 0xFA,
 };
 
-// Chrominance AC (Table K.6)
+// Chrominance AC (Table K.6): codes for run/size AC coefficient pairs
 const std_ac_chrom_bits = [16]u8{ 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77 };
 const std_ac_chrom_vals = [162]u8{
     0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21,
@@ -111,6 +212,9 @@ const std_ac_chrom_vals = [162]u8{
 };
 
 // Precomputed cosine table for IDCT/FDCT
+// cos_table[x][u] = cos((2x+1) * u * π / 16)
+// Used in the separable 2D DCT/IDCT as defined in ITU-T T.81 Section A.3.3
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section A.3.3)
 const cos_table: [8][8]f64 = blk: {
     var table: [8][8]f64 = undefined;
     for (0..8) |x| {
@@ -124,26 +228,49 @@ const cos_table: [8][8]f64 = blk: {
 };
 
 // Huffman decoding table
+// Stores precomputed min/max code values per bit length for fast lookup decoding.
+// Based on the algorithm in ITU-T T.81 Figure F.16 (Huffman code table generation).
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section F.2.2.3)
 const HuffTable = struct {
+    /// Minimum code value for each bit length (1-16)
     min_code: [17]i32,
+    /// Maximum code value for each bit length (1-16), -1 if no codes of that length
     max_code: [17]i32,
+    /// Index into symbols[] for the first symbol of each bit length
     val_offset: [17]u16,
+    /// Symbol values (HUFFVAL) in code order
     symbols: [256]u8,
+    /// Total number of symbols in the table
     num_symbols: u16,
 };
 
 // Huffman encoding table
+// Maps symbol values to their Huffman code and code length for entropy coding.
+// Built from the standard Huffman table specification (BITS and HUFFVAL arrays).
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section C.2)
 const HuffEncTable = struct {
+    /// Huffman code for each symbol value (indexed by symbol)
     codes: [256]u16,
+    /// Code length in bits for each symbol value
     sizes: [256]u8,
 };
 
+// JPEG frame component specification
+// Describes one color component's sampling factors and quantization table assignment.
+// Parsed from the SOF0 marker segment.
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section B.2.2, Table B.2)
 const ComponentInfo = struct {
+    /// Component identifier (e.g., 1=Y, 2=Cb, 3=Cr)
     id: u8,
+    /// Horizontal sampling factor (1-4)
     h_samples: u8,
+    /// Vertical sampling factor (1-4)
     v_samples: u8,
+    /// Quantization table selector (0-3)
     qt_id: u8,
+    /// DC Huffman table selector (assigned in SOS)
     dc_table_id: u8,
+    /// AC Huffman table selector (assigned in SOS)
     ac_table_id: u8,
 };
 
@@ -218,6 +345,10 @@ fn clampU8(value: i32) u8 {
 }
 
 // ─── JPEG Decoder ───
+// Sequential baseline JPEG decoder implementing ITU-T T.81.
+// Parses marker segments (SOI, SOF0, DHT, DQT, SOS, DRI, EOI),
+// performs Huffman decoding, dequantization, and inverse DCT.
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf
 
 const Decoder = struct {
     data: []const u8,
@@ -269,19 +400,19 @@ const Decoder = struct {
     fn nextBit(self: *Decoder) !u1 {
         if (self.bits_in == 0) {
             var byte = try self.readU8();
-            if (byte == 0xFF) {
+            if (byte == marker_prefix) {
                 const marker = try self.readU8();
-                if (marker == 0x00) {
+                if (marker == byte_stuffing_suffix) {
                     // Byte stuffing: 0xFF 0x00 → data byte 0xFF
-                } else if (marker >= 0xD0 and marker <= 0xD7) {
+                } else if (marker >= marker_rst0 and marker <= marker_rst7) {
                     // Restart marker: reset state
                     self.dc_pred = [_]i32{0} ** 4;
                     self.bits_in = 0;
                     self.bit_buf = 0;
                     byte = try self.readU8();
-                    if (byte == 0xFF) {
+                    if (byte == marker_prefix) {
                         const m2 = try self.readU8();
-                        if (m2 != 0x00) return error.InvalidMarker;
+                        if (m2 != byte_stuffing_suffix) return error.InvalidMarker;
                     }
                 } else {
                     return error.InvalidMarker;
@@ -340,11 +471,11 @@ const Decoder = struct {
         var i: usize = 1;
         while (i < 64) {
             const symbol = try self.huffDecode(ac_table);
-            if (symbol == 0x00) break; // EOB
+            if (symbol == ac_eob_symbol) break; // EOB
             const run = symbol >> 4;
             const cat: u5 = @intCast(symbol & 0x0F);
-            if (symbol == 0xF0) {
-                i += 16; // ZRL: 16 zeros
+            if (symbol == ac_zrl_symbol) {
+                i += ac_zrl_run; // ZRL: 16 zeros
                 continue;
             }
             i += run;
@@ -384,8 +515,8 @@ const Decoder = struct {
                     const cv: f64 = if (v == 0) (1.0 / @sqrt(2.0)) else 1.0;
                     sum += cv * temp[v * 8 + x] * cos_table[y][v];
                 }
-                // Scale by 1/4 and add level shift of 128
-                const val = sum / 4.0 + 128.0;
+                // Scale by 1/4 and add DC level shift
+                const val = sum / 4.0 + dc_level_shift;
                 output[y * 8 + x] = clampU8(@intFromFloat(@round(val)));
             }
         }
@@ -394,25 +525,25 @@ const Decoder = struct {
     fn parseMarkers(self: *Decoder) !void {
         // Verify SOI
         const soi = try self.readU16BE();
-        if (soi != 0xFFD8) return error.InvalidJpeg;
+        if (soi != marker_soi) return error.InvalidJpeg;
 
         while (self.pos < self.data.len) {
             var marker = try self.readU8();
-            if (marker != 0xFF) continue;
+            if (marker != marker_prefix) continue;
 
             // Skip padding 0xFF bytes
-            while (marker == 0xFF and self.pos < self.data.len) {
+            while (marker == marker_prefix and self.pos < self.data.len) {
                 marker = try self.readU8();
             }
 
             switch (marker) {
-                0xC0 => try self.parseSOF0(),
-                0xC4 => try self.parseDHT(),
-                0xDB => try self.parseDQT(),
-                0xDA => return, // SOS — scan data follows
-                0xDD => try self.parseDRI(),
-                0xD9 => return, // EOI
-                0xD0...0xD7 => {}, // Restart markers
+                marker_sof0 => try self.parseSOF0(),
+                marker_dht => try self.parseDHT(),
+                marker_dqt => try self.parseDQT(),
+                marker_sos => return, // SOS — scan data follows
+                marker_dri => try self.parseDRI(),
+                marker_eoi_type => return, // EOI
+                marker_rst0...marker_rst7 => {}, // Restart markers
                 else => {
                     // Skip unknown marker
                     if (self.pos + 2 <= self.data.len) {
@@ -458,7 +589,7 @@ const Decoder = struct {
         const len = try self.readU16BE();
         _ = len;
         const precision = try self.readU8();
-        if (precision != 8) return error.UnsupportedPrecision;
+        if (precision != jpeg_precision) return error.UnsupportedPrecision;
 
         self.height = try self.readU16BE();
         self.width = try self.readU16BE();
@@ -539,6 +670,11 @@ const Decoder = struct {
     }
 };
 
+/// Decodes a JPEG (baseline DCT) image into a Bitmap.
+/// Supports 8-bit YCbCr and grayscale images with Huffman coding and 4:2:0/4:4:4 subsampling.
+/// Implements the decoding process defined in ITU-T T.81 (ISO/IEC 10918-1).
+/// https://www.w3.org/Graphics/JPEG/itu-t81.pdf
+/// https://en.wikipedia.org/wiki/JPEG#Decoding
 pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
     var dec = Decoder.init(data);
 
@@ -607,8 +743,8 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
                         const cr_val = getSample(&block_outputs[2], px, py, dec.components[2].h_samples, dec.components[2].v_samples, max_h, max_v);
 
                         const yf: f64 = @floatFromInt(y_val);
-                        const cbf: f64 = @as(f64, @floatFromInt(cb_val)) - 128.0;
-                        const crf: f64 = @as(f64, @floatFromInt(cr_val)) - 128.0;
+                        const cbf: f64 = @as(f64, @floatFromInt(cb_val)) - dc_level_shift;
+                        const crf: f64 = @as(f64, @floatFromInt(cr_val)) - dc_level_shift;
 
                         const r = clampU8(@intFromFloat(@round(yf + 1.402 * crf)));
                         const g = clampU8(@intFromFloat(@round(yf - 0.344136 * cbf - 0.714136 * crf)));
@@ -624,7 +760,7 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
                 dec.bits_in = 0;
                 dec.bit_buf = 0;
                 // Skip to next byte-aligned position and find restart marker
-                if (dec.pos < dec.data.len and dec.data[dec.pos] == 0xFF) {
+                if (dec.pos < dec.data.len and dec.data[dec.pos] == marker_prefix) {
                     dec.pos += 1;
                     if (dec.pos < dec.data.len) dec.pos += 1;
                 }
@@ -648,6 +784,9 @@ fn getSample(block_outputs: *const [4][64]u8, px: u32, py: u32, h_s: u8, v_s: u8
 
 // ─── JPEG Encoder ───
 
+// Bit-level writer for JPEG entropy-coded data.
+// Handles byte stuffing: any 0xFF byte in the output is followed by 0x00.
+// https://www.w3.org/Graphics/JPEG/itu-t81.pdf (Section B.1.1.5)
 const BitWriter = struct {
     output: *ByteList,
     buf: u8,
@@ -666,8 +805,8 @@ const BitWriter = struct {
             self.bits += 1;
             if (self.bits == 8) {
                 try self.output.append(self.buf);
-                if (self.buf == 0xFF) {
-                    try self.output.append(0x00); // byte stuffing
+                if (self.buf == marker_prefix) {
+                    try self.output.append(byte_stuffing_suffix);
                 }
                 self.buf = 0;
                 self.bits = 0;
@@ -681,8 +820,8 @@ const BitWriter = struct {
             self.buf <<= shift;
             self.buf |= @truncate((@as(u16, 1) << shift) - 1);
             try self.output.append(self.buf);
-            if (self.buf == 0xFF) {
-                try self.output.append(0x00);
+            if (self.buf == marker_prefix) {
+                try self.output.append(byte_stuffing_suffix);
             }
             self.buf = 0;
             self.bits = 0;
@@ -732,6 +871,10 @@ fn scaleQuantTable(base: *const [64]u8, quality: u8) [64]u16 {
     return table;
 }
 
+/// Encodes a Bitmap into a baseline JPEG image with 4:2:0 chroma subsampling.
+/// Applies forward DCT, quantization, and Huffman coding as defined in ITU-T T.81.
+/// https://www.w3.org/Graphics/JPEG/itu-t81.pdf
+/// https://en.wikipedia.org/wiki/JPEG#JPEG_codec_example
 pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]u8 {
     var output = ByteList.init(allocator);
     errdefer output.deinit();
@@ -746,18 +889,11 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]
     const ac_chrom_enc = buildEncTable(&std_ac_chrom_bits, &std_ac_chrom_vals);
 
     // SOI
-    try output.appendSlice(&[_]u8{ 0xFF, 0xD8 });
+    try output.appendSlice(&[_]u8{ marker_prefix, marker_soi & 0xFF });
 
     // APP0 (JFIF)
-    try output.appendSlice(&[_]u8{
-        0xFF, 0xE0, 0x00, 0x10, // marker + length
-        0x4A, 0x46, 0x49, 0x46, 0x00, // "JFIF\0"
-        0x01, 0x01, // version 1.1
-        0x00, // aspect ratio units (0 = no units)
-        0x00, 0x01, // X density
-        0x00, 0x01, // Y density
-        0x00, 0x00, // thumbnail dimensions
-    });
+    try output.appendSlice(&marker_app0);
+    try output.appendSlice(&jfif_app0_data);
 
     // DQT (luminance)
     try writeQuantTable(&output, 0, &lum_qt);
@@ -768,16 +904,16 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]
     const width = bmp.width;
     const height = bmp.height;
     try output.appendSlice(&[_]u8{
-        0xFF, 0xC0,
+        marker_prefix, marker_sof0,
         0x00, 0x11, // length = 17
-        0x08, // precision
+        jpeg_precision,
     });
     try output.append(@truncate(height >> 8));
     try output.append(@truncate(height));
     try output.append(@truncate(width >> 8));
     try output.append(@truncate(width));
     try output.appendSlice(&[_]u8{
-        0x03, // 3 components
+        jpeg_num_components,
         0x01, 0x22, 0x00, // Y: id=1, h=2,v=2, qt=0
         0x02, 0x11, 0x01, // Cb: id=2, h=1,v=1, qt=1
         0x03, 0x11, 0x01, // Cr: id=3, h=1,v=1, qt=1
@@ -791,9 +927,9 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]
 
     // SOS
     try output.appendSlice(&[_]u8{
-        0xFF, 0xDA,
+        marker_prefix, marker_sos,
         0x00, 0x0C, // length = 12
-        0x03, // 3 components
+        jpeg_num_components,
         0x01, 0x00, // Y: dc=0, ac=0
         0x02, 0x11, // Cb: dc=1, ac=1
         0x03, 0x11, // Cr: dc=1, ac=1
@@ -804,8 +940,8 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]
     var bw = BitWriter.init(&output);
     var dc_pred = [_]i32{ 0, 0, 0 };
 
-    const mcu_w: u32 = 16;
-    const mcu_h: u32 = 16;
+    const mcu_w: u32 = mcu_size_420;
+    const mcu_h: u32 = mcu_size_420;
     const mcus_x = (width + mcu_w - 1) / mcu_w;
     const mcus_y = (height + mcu_h - 1) / mcu_h;
 
@@ -832,7 +968,7 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]
                             const rf: f64 = @floatFromInt(color.r);
                             const gf: f64 = @floatFromInt(color.g);
                             const bf: f64 = @floatFromInt(color.b);
-                            y_samples[block_idx][iy * 8 + ix] = 0.299 * rf + 0.587 * gf + 0.114 * bf - 128.0;
+                            y_samples[block_idx][iy * 8 + ix] = 0.299 * rf + 0.587 * gf + 0.114 * bf - dc_level_shift;
                         }
                     }
                 }
@@ -886,7 +1022,7 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]
     try bw.flush();
 
     // EOI
-    try output.appendSlice(&[_]u8{ 0xFF, 0xD9 });
+    try output.appendSlice(&marker_eoi);
 
     return output.toOwnedSlice();
 }
@@ -929,7 +1065,7 @@ fn encodeBlock(
 
     if (last_nonzero == 0 and quantized[0] == dc_val) {
         // All AC coefficients are zero
-        try bw.writeBits(ac_enc.codes[0x00], @intCast(ac_enc.sizes[0x00])); // EOB
+        try bw.writeBits(ac_enc.codes[ac_eob_symbol], @intCast(ac_enc.sizes[ac_eob_symbol])); // EOB
         return;
     }
 
@@ -941,10 +1077,10 @@ fn encodeBlock(
             i += 1;
         }
 
-        while (run >= 16) {
+        while (run >= ac_zrl_run) {
             // ZRL: 16 zeros
-            try bw.writeBits(ac_enc.codes[0xF0], @intCast(ac_enc.sizes[0xF0]));
-            run -= 16;
+            try bw.writeBits(ac_enc.codes[ac_zrl_symbol], @intCast(ac_enc.sizes[ac_zrl_symbol]));
+            run -= ac_zrl_run;
         }
 
         if (i > last_nonzero) break;
@@ -964,13 +1100,13 @@ fn encodeBlock(
     }
 
     // EOB if we haven't reached position 63
-    if (last_nonzero < 63) {
-        try bw.writeBits(ac_enc.codes[0x00], @intCast(ac_enc.sizes[0x00]));
+    if (last_nonzero < block_coeff_count - 1) {
+        try bw.writeBits(ac_enc.codes[ac_eob_symbol], @intCast(ac_enc.sizes[ac_eob_symbol]));
     }
 }
 
 fn writeQuantTable(output: *ByteList, table_id: u8, qt: *const [64]u16) !void {
-    try output.appendSlice(&[_]u8{ 0xFF, 0xDB });
+    try output.appendSlice(&[_]u8{ marker_prefix, marker_dqt });
     try output.appendSlice(&[_]u8{ 0x00, 0x43 }); // length = 67
     try output.append(table_id); // 8-bit precision (0) | table ID
     for (0..64) |i| {
@@ -979,7 +1115,7 @@ fn writeQuantTable(output: *ByteList, table_id: u8, qt: *const [64]u16) !void {
 }
 
 fn writeHuffTable(output: *ByteList, class_id: u8, bits: *const [16]u8, vals: []const u8) !void {
-    try output.appendSlice(&[_]u8{ 0xFF, 0xC4 });
+    try output.appendSlice(&[_]u8{ marker_prefix, marker_dht });
     const len: u16 = @intCast(2 + 1 + 16 + vals.len);
     try output.append(@truncate(len >> 8));
     try output.append(@truncate(len));
