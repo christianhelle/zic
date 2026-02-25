@@ -140,3 +140,155 @@ pub const Args = struct {
         }
     }
 };
+
+// ─── Tests ───
+
+const testing = std.testing;
+
+test "isAnyOf matches short arg" {
+    try testing.expect(isAnyOf("-i", "-i", "--input"));
+}
+
+test "isAnyOf matches long arg" {
+    try testing.expect(isAnyOf("--input", "-i", "--input"));
+}
+
+test "isAnyOf rejects non-matching" {
+    try testing.expect(!isAnyOf("-x", "-i", "--input"));
+    try testing.expect(!isAnyOf("", "-i", "--input"));
+    try testing.expect(!isAnyOf("--output", "-i", "--input"));
+}
+
+test "Options default values" {
+    const opts = Options{
+        .batch_mode = false,
+        .version = false,
+        .help = false,
+    };
+    try testing.expectEqual(format.Format.bmp_fmt, opts.format);
+    try testing.expectEqual(@as(u8, 85), opts.quality);
+    try testing.expect(!opts.batch_mode);
+    try testing.expect(!opts.version);
+    try testing.expect(!opts.help);
+}
+
+test "printVersion does not crash" {
+    printVersion();
+}
+
+test "printUsage does not crash" {
+    printUsage();
+}
+
+test "Args hasPathArgs with empty paths" {
+    var args = Args{
+        .options = Options{
+            .batch_mode = false,
+            .version = false,
+            .help = true,
+        },
+        .input_path = "",
+        .output_path = "",
+        .errors = .empty,
+        .allocator = testing.allocator,
+    };
+    try testing.expect(!args.hasPathArgs());
+}
+
+test "Args hasPathArgs with input path" {
+    var args = Args{
+        .options = Options{
+            .batch_mode = false,
+            .version = false,
+            .help = false,
+        },
+        .input_path = "input.bmp",
+        .output_path = "",
+        .errors = .empty,
+        .allocator = testing.allocator,
+    };
+    try testing.expect(args.hasPathArgs());
+}
+
+test "Args hasPathArgs with output path" {
+    var args = Args{
+        .options = Options{
+            .batch_mode = false,
+            .version = false,
+            .help = false,
+        },
+        .input_path = "",
+        .output_path = "output.png",
+        .errors = .empty,
+        .allocator = testing.allocator,
+    };
+    try testing.expect(args.hasPathArgs());
+}
+
+test "Args hasPathArgs with both paths" {
+    var args = Args{
+        .options = Options{
+            .batch_mode = false,
+            .version = false,
+            .help = false,
+        },
+        .input_path = "in.bmp",
+        .output_path = "out.png",
+        .errors = .empty,
+        .allocator = testing.allocator,
+    };
+    try testing.expect(args.hasPathArgs());
+}
+
+test "Args isBatchMode returns batch_mode option" {
+    var args = Args{
+        .options = Options{
+            .batch_mode = true,
+            .version = false,
+            .help = false,
+        },
+        .input_path = "",
+        .output_path = "",
+        .errors = .empty,
+        .allocator = testing.allocator,
+    };
+    try testing.expect(args.isBatchMode());
+}
+
+test "Args isBatchMode false by default" {
+    var args = Args{
+        .options = Options{
+            .batch_mode = false,
+            .version = false,
+            .help = false,
+        },
+        .input_path = "",
+        .output_path = "",
+        .errors = .empty,
+        .allocator = testing.allocator,
+    };
+    try testing.expect(!args.isBatchMode());
+}
+
+test "isFolderPath returns false for nonexistent path" {
+    try testing.expect(!Args.isFolderPath("nonexistent_dir_xyz"));
+}
+
+test "isFolderPath returns false for file path" {
+    try testing.expect(!Args.isFolderPath("src/main.zig"));
+}
+
+test "isFolderPath returns true for existing directory" {
+    try testing.expect(Args.isFolderPath("src"));
+}
+
+test "isAnyOf with all flags" {
+    try testing.expect(isAnyOf("-h", "-h", "--help"));
+    try testing.expect(isAnyOf("--help", "-h", "--help"));
+    try testing.expect(isAnyOf("-v", "-v", "--version"));
+    try testing.expect(isAnyOf("--version", "-v", "--version"));
+    try testing.expect(isAnyOf("-q", "-q", "--quality"));
+    try testing.expect(isAnyOf("--quality", "-q", "--quality"));
+    try testing.expect(isAnyOf("-o", "-o", "--output"));
+    try testing.expect(isAnyOf("--output", "-o", "--output"));
+}
