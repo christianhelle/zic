@@ -1123,3 +1123,425 @@ fn writeHuffTable(output: *ByteList, class_id: u8, bits: *const [16]u8, vals: []
     try output.appendSlice(bits);
     try output.appendSlice(vals);
 }
+
+// ─── Tests ───
+
+const testing = std.testing;
+
+test "bitSize zero" {
+    try testing.expectEqual(@as(u5, 0), bitSize(0));
+}
+
+test "bitSize positive values" {
+    try testing.expectEqual(@as(u5, 1), bitSize(1));
+    try testing.expectEqual(@as(u5, 2), bitSize(2));
+    try testing.expectEqual(@as(u5, 2), bitSize(3));
+    try testing.expectEqual(@as(u5, 3), bitSize(4));
+    try testing.expectEqual(@as(u5, 3), bitSize(7));
+    try testing.expectEqual(@as(u5, 4), bitSize(8));
+    try testing.expectEqual(@as(u5, 8), bitSize(255));
+}
+
+test "bitSize negative values" {
+    try testing.expectEqual(@as(u5, 1), bitSize(-1));
+    try testing.expectEqual(@as(u5, 2), bitSize(-2));
+    try testing.expectEqual(@as(u5, 2), bitSize(-3));
+    try testing.expectEqual(@as(u5, 8), bitSize(-255));
+}
+
+test "clampU8 within range" {
+    try testing.expectEqual(@as(u8, 0), clampU8(0));
+    try testing.expectEqual(@as(u8, 128), clampU8(128));
+    try testing.expectEqual(@as(u8, 255), clampU8(255));
+}
+
+test "clampU8 below zero" {
+    try testing.expectEqual(@as(u8, 0), clampU8(-1));
+    try testing.expectEqual(@as(u8, 0), clampU8(-1000));
+}
+
+test "clampU8 above 255" {
+    try testing.expectEqual(@as(u8, 255), clampU8(256));
+    try testing.expectEqual(@as(u8, 255), clampU8(10000));
+}
+
+test "buildHuffTable produces valid table" {
+    const table = buildHuffTable(&std_dc_lum_bits, &std_dc_lum_vals);
+    try testing.expectEqual(@as(u16, 12), table.num_symbols);
+    // First symbol should be accessible
+    try testing.expect(table.max_code[2] >= 0);
+}
+
+test "buildEncTable produces valid table" {
+    const enc = buildEncTable(&std_dc_lum_bits, &std_dc_lum_vals);
+    // Symbol 0 should have a code
+    try testing.expect(enc.sizes[0] > 0);
+    // Symbol 1 should have a code
+    try testing.expect(enc.sizes[1] > 0);
+}
+
+test "buildHuffTable and buildEncTable consistency" {
+    const dec_table = buildHuffTable(&std_dc_lum_bits, &std_dc_lum_vals);
+    const enc_table = buildEncTable(&std_dc_lum_bits, &std_dc_lum_vals);
+
+    // All symbols in the decode table should have matching encode entries
+    for (0..dec_table.num_symbols) |i| {
+        const sym = dec_table.symbols[i];
+        try testing.expect(enc_table.sizes[sym] > 0);
+    }
+}
+
+test "scaleQuantTable quality 50" {
+    const qt = scaleQuantTable(&std_lum_qt, 50);
+    // At quality 50, scale = 200 - 2*50 = 100, so values should be close to original
+    try testing.expectEqual(@as(u16, 16), qt[0]);
+    try testing.expectEqual(@as(u16, 11), qt[1]);
+}
+
+test "scaleQuantTable quality 1 produces large values" {
+    const qt = scaleQuantTable(&std_lum_qt, 1);
+    // Quality 1: scale = 5000/1 = 5000, values should be clamped to 255
+    try testing.expect(qt[0] >= 16); // Should be much higher
+}
+
+test "scaleQuantTable quality 100 produces small values" {
+    const qt = scaleQuantTable(&std_lum_qt, 100);
+    // Quality 100: scale = 200 - 200 = 0, values = (base * 0 + 50) / 100 = 0 -> clamped to 1
+    for (0..64) |i| {
+        try testing.expect(qt[i] >= 1);
+    }
+}
+
+test "scaleQuantTable values always at least 1" {
+    for (1..101) |q| {
+        const qt = scaleQuantTable(&std_lum_qt, @intCast(q));
+        for (0..64) |i| {
+            try testing.expect(qt[i] >= 1);
+        }
+    }
+}
+
+test "scaleQuantTable chrominance" {
+    const qt = scaleQuantTable(&std_chrom_qt, 50);
+    try testing.expectEqual(@as(u16, 17), qt[0]);
+}
+
+test "zigzag_order has all indices 0-63" {
+    var seen = [_]bool{false} ** 64;
+    for (zigzag_order) |idx| {
+        try testing.expect(idx < 64);
+        seen[idx] = true;
+    }
+    for (seen) |s| {
+        try testing.expect(s);
+    }
+}
+
+test "zigzag_inverse is inverse of zigzag_order" {
+    for (0..64) |i| {
+        try testing.expectEqual(@as(u8, @intCast(i)), zigzag_order[zigzag_inverse[i]]);
+    }
+}
+
+test "cos_table values are in range [-1, 1]" {
+    for (0..8) |x| {
+        for (0..8) |u| {
+            try testing.expect(cos_table[x][u] >= -1.0);
+            try testing.expect(cos_table[x][u] <= 1.0);
+        }
+    }
+}
+
+test "cos_table[x][0] is 1 for all x" {
+    for (0..8) |x| {
+        try testing.expect(@abs(cos_table[x][0] - 1.0) < 1e-10);
+    }
+}
+
+test "BitWriter writeBits and flush" {
+    var output = ByteList.init(testing.allocator);
+    defer output.deinit();
+
+    var bw = BitWriter.init(&output);
+    try bw.writeBits(0b110, 3);
+    try bw.flush();
+
+    try testing.expect(output.items.len >= 1);
+}
+
+test "BitWriter byte stuffing for 0xFF" {
+    var output = ByteList.init(testing.allocator);
+    defer output.deinit();
+
+    var bw = BitWriter.init(&output);
+    // Write 8 bits of 0xFF
+    try bw.writeBits(0xFF, 8);
+
+    // Output should have 0xFF followed by 0x00
+    try testing.expect(output.items.len >= 2);
+    try testing.expectEqual(@as(u8, 0xFF), output.items[0]);
+    try testing.expectEqual(@as(u8, 0x00), output.items[1]);
+}
+
+test "BitWriter empty flush" {
+    var output = ByteList.init(testing.allocator);
+    defer output.deinit();
+
+    var bw = BitWriter.init(&output);
+    try bw.flush();
+    // No output when nothing was written
+    try testing.expectEqual(@as(usize, 0), output.items.len);
+}
+
+test "fdct and idct roundtrip" {
+    var input: [64]f64 = undefined;
+    for (0..64) |i| {
+        input[i] = @as(f64, @floatFromInt(i)) - 32.0;
+    }
+
+    var dct_out: [64]f64 = undefined;
+    fdct(&input, &dct_out);
+
+    // Convert to i32 for idct (simulating quantize with q=1)
+    var block: [64]i32 = undefined;
+    for (0..64) |i| {
+        block[i] = @intFromFloat(@round(dct_out[i]));
+    }
+
+    var idct_out: [64]u8 = undefined;
+    Decoder.idct(&block, &idct_out);
+
+    // Values should be roughly close to input + 128 (DC shift)
+    for (0..64) |i| {
+        const expected = input[i] + 128.0;
+        const actual: f64 = @floatFromInt(idct_out[i]);
+        const diff = @abs(expected - actual);
+        try testing.expect(diff < 2.0); // Allow small rounding error
+    }
+}
+
+test "JPEG encode-decode roundtrip solid color" {
+    var bmp = try Bitmap.init(testing.allocator, 16, 16);
+    defer bmp.deinit();
+
+    // Fill with a solid color
+    var y: u32 = 0;
+    while (y < 16) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 16) : (x += 1) {
+            bmp.setPixel(x, y, Color.rgb(128, 128, 128));
+        }
+    }
+
+    const data = try encode(testing.allocator, &bmp, 95);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    try testing.expectEqual(@as(u32, 16), decoded.width);
+    try testing.expectEqual(@as(u32, 16), decoded.height);
+
+    // JPEG is lossy - check pixels are close
+    const p = decoded.getPixel(8, 8);
+    try testing.expect(@abs(@as(i16, p.r) - 128) < 10);
+    try testing.expect(@abs(@as(i16, p.g) - 128) < 10);
+    try testing.expect(@abs(@as(i16, p.b) - 128) < 10);
+}
+
+test "JPEG encode produces valid SOI and EOI markers" {
+    var bmp = try Bitmap.init(testing.allocator, 8, 8);
+    defer bmp.deinit();
+
+    const data = try encode(testing.allocator, &bmp, 85);
+    defer testing.allocator.free(data);
+
+    // SOI marker
+    try testing.expectEqual(@as(u8, 0xFF), data[0]);
+    try testing.expectEqual(@as(u8, 0xD8), data[1]);
+
+    // EOI marker at end
+    try testing.expectEqual(@as(u8, 0xFF), data[data.len - 2]);
+    try testing.expectEqual(@as(u8, 0xD9), data[data.len - 1]);
+}
+
+test "JPEG encode different qualities produce different sizes" {
+    var bmp = try Bitmap.init(testing.allocator, 16, 16);
+    defer bmp.deinit();
+
+    // Fill with a pattern
+    var y: u32 = 0;
+    while (y < 16) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 16) : (x += 1) {
+            bmp.setPixel(x, y, Color.rgb(
+                @truncate(x * 16),
+                @truncate(y * 16),
+                @truncate((x + y) * 8),
+            ));
+        }
+    }
+
+    const low_q = try encode(testing.allocator, &bmp, 10);
+    defer testing.allocator.free(low_q);
+
+    const high_q = try encode(testing.allocator, &bmp, 95);
+    defer testing.allocator.free(high_q);
+
+    // Higher quality should generally produce larger files
+    try testing.expect(high_q.len >= low_q.len);
+}
+
+test "JPEG encode-decode roundtrip red image" {
+    var bmp = try Bitmap.init(testing.allocator, 16, 16);
+    defer bmp.deinit();
+
+    var y: u32 = 0;
+    while (y < 16) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 16) : (x += 1) {
+            bmp.setPixel(x, y, Color.rgb(255, 0, 0));
+        }
+    }
+
+    const data = try encode(testing.allocator, &bmp, 90);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    // Check center pixel is roughly red
+    const p = decoded.getPixel(8, 8);
+    try testing.expect(p.r > 200);
+    try testing.expect(p.g < 50);
+    try testing.expect(p.b < 50);
+}
+
+test "JPEG encode-decode roundtrip white image" {
+    var bmp = try Bitmap.init(testing.allocator, 16, 16);
+    defer bmp.deinit();
+
+    var y: u32 = 0;
+    while (y < 16) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 16) : (x += 1) {
+            bmp.setPixel(x, y, Color.rgb(255, 255, 255));
+        }
+    }
+
+    const data = try encode(testing.allocator, &bmp, 95);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    const p = decoded.getPixel(8, 8);
+    try testing.expect(p.r > 245);
+    try testing.expect(p.g > 245);
+    try testing.expect(p.b > 245);
+}
+
+test "JPEG encode-decode roundtrip black image" {
+    var bmp = try Bitmap.init(testing.allocator, 16, 16);
+    defer bmp.deinit();
+
+    // Default pixels are (0,0,0,0), set to black opaque
+    var y: u32 = 0;
+    while (y < 16) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 16) : (x += 1) {
+            bmp.setPixel(x, y, Color.rgb(0, 0, 0));
+        }
+    }
+
+    const data = try encode(testing.allocator, &bmp, 95);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    const p = decoded.getPixel(8, 8);
+    try testing.expect(p.r < 10);
+    try testing.expect(p.g < 10);
+    try testing.expect(p.b < 10);
+}
+
+test "JPEG encode JFIF APP0 marker present" {
+    var bmp = try Bitmap.init(testing.allocator, 8, 8);
+    defer bmp.deinit();
+
+    const data = try encode(testing.allocator, &bmp, 85);
+    defer testing.allocator.free(data);
+
+    // APP0 marker should be right after SOI
+    try testing.expectEqual(@as(u8, 0xFF), data[2]);
+    try testing.expectEqual(@as(u8, 0xE0), data[3]);
+}
+
+test "Decoder init" {
+    const data = [_]u8{0} ** 4;
+    const dec = Decoder.init(&data);
+    try testing.expectEqual(@as(usize, 0), dec.pos);
+    try testing.expectEqual(@as(u16, 0), dec.width);
+    try testing.expectEqual(@as(u16, 0), dec.height);
+    try testing.expectEqual(@as(u8, 0), dec.num_components);
+    try testing.expectEqual(@as(u16, 0), dec.restart_interval);
+}
+
+test "getSample with 1:1 sampling" {
+    var blocks: [4][64]u8 = undefined;
+    @memset(&blocks[0], 42);
+
+    const val = getSample(&blocks, 0, 0, 1, 1, 1, 1);
+    try testing.expectEqual(@as(u8, 42), val);
+}
+
+test "getSample with 2:2 sampling" {
+    var blocks: [4][64]u8 = undefined;
+    @memset(&blocks[0], 10);
+    @memset(&blocks[1], 20);
+    @memset(&blocks[2], 30);
+    @memset(&blocks[3], 40);
+
+    // Top-left block
+    const val = getSample(&blocks, 0, 0, 2, 2, 2, 2);
+    try testing.expectEqual(@as(u8, 10), val);
+}
+
+test "JPEG encode-decode non-multiple-of-16 dimensions" {
+    // 10x10 is not a multiple of 16 (MCU size for 4:2:0)
+    var bmp = try Bitmap.init(testing.allocator, 10, 10);
+    defer bmp.deinit();
+
+    var y: u32 = 0;
+    while (y < 10) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 10) : (x += 1) {
+            bmp.setPixel(x, y, Color.rgb(100, 150, 200));
+        }
+    }
+
+    const data = try encode(testing.allocator, &bmp, 85);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    try testing.expectEqual(@as(u32, 10), decoded.width);
+    try testing.expectEqual(@as(u32, 10), decoded.height);
+}
+
+test "JPEG encode-decode 1x1 image" {
+    var bmp = try Bitmap.init(testing.allocator, 1, 1);
+    defer bmp.deinit();
+    bmp.setPixel(0, 0, Color.rgb(128, 128, 128));
+
+    const data = try encode(testing.allocator, &bmp, 85);
+    defer testing.allocator.free(data);
+
+    var decoded = try decode(testing.allocator, data);
+    defer decoded.deinit();
+
+    try testing.expectEqual(@as(u32, 1), decoded.width);
+    try testing.expectEqual(@as(u32, 1), decoded.height);
+}
