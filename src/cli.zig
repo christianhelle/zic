@@ -1,5 +1,6 @@
 const std = @import("std");
 const format = @import("format.zig");
+const io = @import("io.zig");
 
 const VERSION = "0.1.0";
 
@@ -93,8 +94,8 @@ pub const Args = struct {
         }
 
         if (!options.help) {
-            const input_path_is_folder = isFolderPath(input_path orelse "");
-            const output_path_is_folder = isFolderPath(output_path orelse "");
+            const input_path_is_folder = io.isDir(input_path orelse "");
+            const output_path_is_folder = io.isDir(output_path orelse "");
             options.batch_mode = input_path_is_folder or output_path_is_folder;
         }
 
@@ -120,24 +121,6 @@ pub const Args = struct {
 
     pub fn isBatchMode(self: *Args) bool {
         return self.options.batch_mode;
-    }
-
-    fn isFolderPath(path: []const u8) bool {
-        if (std.fs.path.isAbsolute(path)) {
-            var dir = std.fs.openDirAbsolute(
-                path,
-                .{},
-            ) catch return false;
-            dir.close();
-            return true;
-        } else {
-            var dir = std.fs.cwd().openDir(
-                path,
-                .{},
-            ) catch return false;
-            dir.close();
-            return true;
-        }
     }
 };
 
@@ -271,15 +254,15 @@ test "Args isBatchMode false by default" {
 }
 
 test "isFolderPath returns false for nonexistent path" {
-    try testing.expect(!Args.isFolderPath("nonexistent_dir_xyz"));
+    try testing.expect(!Args.isDir("nonexistent_dir_xyz"));
 }
 
 test "isFolderPath returns false for file path" {
-    try testing.expect(!Args.isFolderPath("src/main.zig"));
+    try testing.expect(!Args.isDir("src/main.zig"));
 }
 
 test "isFolderPath returns true for existing directory" {
-    try testing.expect(Args.isFolderPath("src"));
+    try testing.expect(Args.isDir("src"));
 }
 
 test "isAnyOf with all flags" {

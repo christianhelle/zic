@@ -20,3 +20,21 @@ pub fn openOrMakeDir(output_path: []const u8) !std.fs.Dir {
     }
     return output_folder;
 }
+
+pub fn isDir(path: []const u8) bool {
+    if (std.fs.path.isAbsolute(path)) {
+        var dir = std.fs.openDirAbsolute(
+            path,
+            .{},
+        ) catch return false;
+        dir.close();
+        return true;
+    } else {
+        var dir = std.fs.cwd().openDir(
+            path,
+            .{},
+        ) catch return false;
+        dir.close();
+        return true;
+    }
+}
