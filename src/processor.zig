@@ -5,10 +5,14 @@ const png = @import("png.zig");
 const jpeg = @import("jpeg.zig");
 const format = @import("format.zig");
 const cli = @import("cli.zig");
+const io = @import("io.zig");
 
 pub fn processImages(allocator: std.mem.Allocator, args: cli.Args) !void {
     var dir = try std.fs.cwd().openDir(args.input_path, .{ .iterate = true });
     defer dir.close();
+
+    var output_folder = try io.openOrMakeDir(args.output_path);
+    defer output_folder.close();
 
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
