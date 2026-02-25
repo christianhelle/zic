@@ -36,12 +36,20 @@ pub fn main() !void {
         return;
     }
 
+    std.debug.print(
+        "Processing {s} -> {s}\n",
+        .{ args.input_path, args.output_path },
+    );
+
     processor.processImage(
         allocator,
         args.input_path,
         args.output_path,
         args.options,
     ) catch |err| {
-        std.debug.print("Error processing '{s}': {}\n", .{ args.input_path, err });
+        std.debug.print(
+            "Error processing '{s}': {}\n",
+            .{ args.input_path, err },
+        );
     };
 }
