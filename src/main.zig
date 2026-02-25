@@ -15,6 +15,11 @@ pub fn main() !void {
     var args = try cli.Args.init(allocator);
     defer args.deinit();
 
+    if (args.options.version) {
+        cli.printVersion();
+        return;
+    }
+
     if (args.options.help) {
         cli.printUsage();
         if (args.hasPathArgs()) {

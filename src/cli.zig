@@ -3,6 +3,10 @@ const format = @import("format.zig");
 
 const VERSION = "0.1.0";
 
+pub fn printVersion() void {
+    std.debug.print("zic version {s}\n", .{VERSION});
+}
+
 pub fn printUsage() void {
     const usage =
         \\Usage: zic [options]
@@ -64,6 +68,8 @@ pub const Args = struct {
                 }
             } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
                 options.help = true;
+            } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
+                options.version = true;
             }
         }
 
