@@ -123,11 +123,20 @@ pub const Args = struct {
     }
 
     fn isFolderPath(path: []const u8) bool {
-        const dir = std.fs.cwd();
-        const stat = dir.statFile(path) catch |err| {
-            if (err == error.FileNotFound) return false;
-            return false;
-        };
-        return stat.kind == .directory;
+        if (std.fs.path.isAbsolute(path)) {
+            var dir = std.fs.openDirAbsolute(
+                path,
+                .{},
+            ) catch return false;
+            dir.close();
+            return true;
+        } else {
+            var dir = std.fs.cwd().openDir(
+                path,
+                .{},
+            ) catch return false;
+            dir.close();
+            return true;
+        }
     }
 };
