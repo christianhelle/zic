@@ -53,3 +53,13 @@ pub fn main() !void {
         );
     };
 }
+
+test "imports compile" {
+    _ = @import("cli.zig");
+    _ = @import("format.zig");
+    _ = @import("bitmap.zig");
+    _ = @import("bmp.zig");
+    _ = @import("png.zig");
+    _ = @import("jpeg.zig");
+    _ = @import("processor.zig");
+}
