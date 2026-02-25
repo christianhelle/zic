@@ -35,6 +35,15 @@ pub const Options = struct {
     help: bool,
 };
 
+fn isAnyOf(
+    arg: []const u8,
+    short_arg: []const u8,
+    long_arg: []const u8,
+) bool {
+    return std.mem.eql(u8, arg, short_arg) or
+        std.mem.eql(u8, arg, long_arg);
+}
+
 pub const Args = struct {
     options: Options,
     input_path: []const u8,
@@ -58,18 +67,18 @@ pub const Args = struct {
         var output_path: ?[]const u8 = null;
 
         while (args.next()) |arg| {
-            if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--input")) {
+            if (isAnyOf(arg, "-i", "--input")) {
                 input_path = args.next();
-            } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+            } else if (isAnyOf(arg, "-o", "--output")) {
                 output_path = args.next();
-            } else if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quality")) {
+            } else if (isAnyOf(arg, "-h", "--help")) {
+                options.help = true;
+            } else if (isAnyOf(arg, "-v", "--version")) {
+                options.version = true;
+            } else if (isAnyOf(arg, "-q", "--quality")) {
                 if (args.next()) |q| {
                     options.quality = std.fmt.parseInt(u8, q, 10) catch 85;
                 }
-            } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-                options.help = true;
-            } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
-                options.version = true;
             }
         }
 
