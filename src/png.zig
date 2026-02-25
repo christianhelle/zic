@@ -1,7 +1,11 @@
-const std = @import("std");
+const testing = std.testing;
+
 const bitmap = @import("bitmap.zig");
 const Color = bitmap.Color;
 const Bitmap = bitmap.Bitmap;
+
+const std = @import("std");
+
 const ByteList = std.array_list.Managed(u8);
 
 // PNG file signature: 8 bytes identifying a valid PNG file
@@ -349,8 +353,6 @@ fn writeChunk(output: *ByteList, chunk_type: *const [4]u8, data: []const u8) !vo
 }
 
 // ─── Tests ───
-
-const testing = std.testing;
 
 test "readU32BE big endian" {
     const data = [_]u8{ 0x12, 0x34, 0x56, 0x78 };

@@ -1,6 +1,9 @@
-const std = @import("std");
+const testing = std.testing;
+
 const format = @import("format.zig");
 const io = @import("io.zig");
+
+const std = @import("std");
 
 const VERSION = "0.1.0";
 
@@ -126,7 +129,6 @@ pub const Args = struct {
 
 // ─── Tests ───
 
-const testing = std.testing;
 test "isAnyOf matches short arg" {
     try testing.expect(isAnyOf("-i", "-i", "--input"));
 }

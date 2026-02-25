@@ -1,11 +1,16 @@
-const std = @import("std");
+const testing = std.testing;
+
 const bitmap = @import("bitmap.zig");
+const Color = bitmap.Color;
+const Bitmap = bitmap.Bitmap;
 const bmp = @import("bmp.zig");
-const png = @import("png.zig");
-const jpeg = @import("jpeg.zig");
-const format = @import("format.zig");
 const cli = @import("cli.zig");
+const format = @import("format.zig");
 const io = @import("io.zig");
+const jpeg = @import("jpeg.zig");
+const png = @import("png.zig");
+
+const std = @import("std");
 
 pub fn processImages(allocator: std.mem.Allocator, args: cli.Args) !void {
     var dir = try std.fs.cwd().openDir(args.input_path, .{ .iterate = true });
@@ -125,10 +130,6 @@ pub fn processImage(
 }
 
 // ─── Tests ───
-
-const testing = std.testing;
-const Color = bitmap.Color;
-const Bitmap = bitmap.Bitmap;
 
 fn createTestBitmap(allocator: std.mem.Allocator, w: u32, h: u32) !Bitmap {
     var bm = try Bitmap.init(allocator, w, h);

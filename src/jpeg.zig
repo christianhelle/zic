@@ -1,7 +1,11 @@
-const std = @import("std");
+const testing = std.testing;
+
 const bitmap = @import("bitmap.zig");
 const Color = bitmap.Color;
 const Bitmap = bitmap.Bitmap;
+
+const std = @import("std");
+
 const ByteList = std.array_list.Managed(u8);
 
 // ─── JPEG Marker Codes ───
@@ -879,7 +883,7 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]
     var output = ByteList.init(allocator);
     errdefer output.deinit();
 
-    const lum_qt= scaleQuantTable(&std_lum_qt, quality);
+    const lum_qt = scaleQuantTable(&std_lum_qt, quality);
     const chrom_qt = scaleQuantTable(&std_chrom_qt, quality);
 
     // Build encoding Huffman tables
@@ -905,7 +909,7 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]
     const height = bmp.height;
     try output.appendSlice(&[_]u8{
         marker_prefix, marker_sof0,
-        0x00, 0x11, // length = 17
+        0x00,           0x11, // length = 17
         jpeg_precision,
     });
     try output.append(@truncate(height >> 8));
@@ -928,7 +932,7 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap, quality: u8) ![]
     // SOS
     try output.appendSlice(&[_]u8{
         marker_prefix, marker_sos,
-        0x00, 0x0C, // length = 12
+        0x00,                0x0C, // length = 12
         jpeg_num_components,
         0x01, 0x00, // Y: dc=0, ac=0
         0x02, 0x11, // Cb: dc=1, ac=1
@@ -1125,8 +1129,6 @@ fn writeHuffTable(output: *ByteList, class_id: u8, bits: *const [16]u8, vals: []
 }
 
 // ─── Tests ───
-
-const testing = std.testing;
 
 test "bitSize zero" {
     try testing.expectEqual(@as(u5, 0), bitSize(0));

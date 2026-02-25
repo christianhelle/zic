@@ -1,7 +1,10 @@
-const std = @import("std");
+const testing = std.testing;
+
 const bitmap = @import("bitmap.zig");
 const Color = bitmap.Color;
 const Bitmap = bitmap.Bitmap;
+
+const std = @import("std");
 
 // BMP file format magic signature: ASCII "BM" identifying a Windows bitmap file
 // https://en.wikipedia.org/wiki/BMP_file_format#Bitmap_file_header
@@ -168,8 +171,6 @@ pub fn encode(allocator: std.mem.Allocator, bmp: *const Bitmap) ![]u8 {
 }
 
 // ─── Tests ───
-
-const testing = std.testing;
 
 test "readU16 little endian" {
     const data = [_]u8{ 0x34, 0x12 };

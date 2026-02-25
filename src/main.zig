@@ -1,11 +1,12 @@
-const std = @import("std");
 const bitmap = @import("bitmap.zig");
 const bmp = @import("bmp.zig");
-const png = @import("png.zig");
-const jpeg = @import("jpeg.zig");
-const format = @import("format.zig");
 const cli = @import("cli.zig");
+const format = @import("format.zig");
+const jpeg = @import("jpeg.zig");
+const png = @import("png.zig");
 const processor = @import("processor.zig");
+
+const std = @import("std");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
