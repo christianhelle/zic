@@ -62,4 +62,5 @@ test "imports compile" {
     _ = @import("png.zig");
     _ = @import("jpeg.zig");
     _ = @import("processor.zig");
+    _ = @import("io.zig");
 }
