@@ -12,12 +12,34 @@ const png = @import("png.zig");
 
 const std = @import("std");
 
+const Job = struct {
+    input_path: []const u8,
+    output_path: []const u8,
+
+    fn deinit(self: Job, allocator: std.mem.Allocator) !void {
+        allocator.free(self.input_path);
+        allocator.free(self.output_path);
+    }
+};
+
 pub fn processImages(allocator: std.mem.Allocator, args: cli.Args) !void {
-    var dir = try std.fs.cwd().openDir(args.input_path, .{ .iterate = true });
+    var dir = try std.fs.cwd().openDir(
+        args.input_path,
+        .{ .iterate = true },
+    );
     defer dir.close();
 
     var output_folder = try io.openOrMakeDir(args.output_path);
     defer output_folder.close();
+
+    var jobs: std.ArrayList(Job) = .empty;
+    defer jobs.deinit(allocator);
+
+    const start = std.time.nanoTimestamp();
+    std.debug.print(
+        "Scanning {s} directory...\n",
+        .{args.input_path},
+    );
 
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
@@ -26,7 +48,6 @@ pub fn processImages(allocator: std.mem.Allocator, args: cli.Args) !void {
                 allocator,
                 &.{ args.input_path, entry.name },
             );
-            defer allocator.free(input_path);
 
             const extension = switch (args.options.format) {
                 .bmp_fmt => ".bmp",
@@ -45,19 +66,58 @@ pub fn processImages(allocator: std.mem.Allocator, args: cli.Args) !void {
                 allocator,
                 &.{ args.output_path, output_file_name },
             );
-            defer allocator.free(output_path);
 
-            std.debug.print("Processing {s} -> {s}\n", .{ input_path, output_path });
-            processImage(
+            jobs.append(
                 allocator,
-                input_path,
-                output_path,
-                args.options,
+                .{
+                    .input_path = input_path,
+                    .output_path = output_path,
+                },
             ) catch |err| {
-                std.debug.print("Error processing '{s}': {}\n", .{ input_path, err });
+                std.debug.print(
+                    "Error enqueing storing path '{s}': {}\n",
+                    .{ input_path, err },
+                );
             };
         }
     }
+
+    std.debug.print("Found {} file(s)\n", .{jobs.items.len});
+
+    for (jobs.items) |job| {
+        std.debug.print(
+            "\nProcessing {s} -> {s}\n",
+            .{ job.input_path, job.output_path },
+        );
+
+        processImage(
+            allocator,
+            job.input_path,
+            job.output_path,
+            args.options,
+        ) catch |err| {
+            std.debug.print(
+                "Error processing '{s}': {}\n",
+                .{ job.input_path, err },
+            );
+        };
+
+        job.deinit(allocator) catch |err| {
+            std.debug.print(
+                "Error deinitializing job for '{s}': {}\n",
+                .{ job.input_path, err },
+            );
+        };
+    }
+    const end = std.time.nanoTimestamp();
+    const elapsed_ns: i128 = end - start;
+    std.debug.print(
+        "\nCompleted processing {} file(s) in {}ms\n",
+        .{
+            jobs.items.len,
+            @divTrunc(elapsed_ns, 1_000_000),
+        },
+    );
 }
 
 pub fn processImage(
