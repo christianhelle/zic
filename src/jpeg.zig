@@ -280,10 +280,10 @@ const ComponentInfo = struct {
 
 fn buildHuffTable(bits: []const u8, vals: []const u8) HuffTable {
     var table: HuffTable = .{
-        .min_code = [_]i32{0} ** 17,
-        .max_code = [_]i32{-1} ** 17,
-        .val_offset = [_]u16{0} ** 17,
-        .symbols = [_]u8{0} ** 256,
+        .min_code = @splat(0),
+        .max_code = @splat(-1),
+        .val_offset = @splat(0),
+        .symbols = @splat(0),
         .num_symbols = 0,
     };
 
@@ -311,8 +311,8 @@ fn buildHuffTable(bits: []const u8, vals: []const u8) HuffTable {
 
 fn buildEncTable(bits: []const u8, vals: []const u8) HuffEncTable {
     var table: HuffEncTable = .{
-        .codes = [_]u16{0} ** 256,
-        .sizes = [_]u8{0} ** 256,
+        .codes = @splat(0),
+        .sizes = @splat(0),
     };
 
     var code: u16 = 0;
@@ -382,7 +382,7 @@ const Decoder = struct {
             .ac_huff = std.mem.zeroes([4]HuffTable),
             .bit_buf = 0,
             .bits_in = 0,
-            .dc_pred = [_]i32{0} ** 4,
+            .dc_pred = @splat(0),
             .restart_interval = 0,
         };
     }
@@ -410,7 +410,7 @@ const Decoder = struct {
                     // Byte stuffing: 0xFF 0x00 → data byte 0xFF
                 } else if (marker >= marker_rst0 and marker <= marker_rst7) {
                     // Restart marker: reset state
-                    self.dc_pred = [_]i32{0} ** 4;
+                    self.dc_pred = @splat(0);
                     self.bits_in = 0;
                     self.bit_buf = 0;
                     byte = try self.readU8();
@@ -630,7 +630,7 @@ const Decoder = struct {
                 remaining -= 1;
             }
 
-            var vals: [256]u8 = [_]u8{0} ** 256;
+            var vals: [256]u8 = @splat(0);
             for (0..total) |i| {
                 vals[i] = try self.readU8();
                 remaining -= 1;
@@ -760,7 +760,7 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) !Bitmap {
 
             mcu_count += 1;
             if (dec.restart_interval > 0 and mcu_count % @as(u32, dec.restart_interval) == 0) {
-                dec.dc_pred = [_]i32{0} ** 4;
+                dec.dc_pred = @splat(0);
                 dec.bits_in = 0;
                 dec.bit_buf = 0;
                 // Skip to next byte-aligned position and find restart marker
@@ -1229,7 +1229,7 @@ test "scaleQuantTable chrominance" {
 }
 
 test "zigzag_order has all indices 0-63" {
-    var seen = [_]bool{false} ** 64;
+    var seen = @as([64]bool, @splat(false));
     for (zigzag_order) |idx| {
         try testing.expect(idx < 64);
         seen[idx] = true;
@@ -1481,7 +1481,7 @@ test "JPEG encode JFIF APP0 marker present" {
 }
 
 test "Decoder init" {
-    const data = [_]u8{0} ** 4;
+    const data = @as([4]u8, @splat(0));
     const dec = Decoder.init(&data);
     try testing.expectEqual(@as(usize, 0), dec.pos);
     try testing.expectEqual(@as(u16, 0), dec.width);
