@@ -1,7 +1,7 @@
 const testing = std.testing;
 
 const format = @import("format.zig");
-const io = @import("io.zig");
+const io_util = @import("io.zig");
 
 const std = @import("std");
 
@@ -55,8 +55,8 @@ pub const Args = struct {
     errors: std.ArrayList([]const u8),
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) !Args {
-        var args = try std.process.argsWithAllocator(allocator);
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, process_args: std.process.Args) !Args {
+        var args = try process_args.iterateAllocator(allocator);
         defer args.deinit();
         _ = args.next();
 
@@ -97,8 +97,8 @@ pub const Args = struct {
         }
 
         if (!options.help) {
-            const input_path_is_folder = io.isDir(input_path orelse "");
-            const output_path_is_folder = io.isDir(output_path orelse "");
+            const input_path_is_folder = io_util.isDir(io, input_path orelse "");
+            const output_path_is_folder = io_util.isDir(io, output_path orelse "");
             options.batch_mode = input_path_is_folder or output_path_is_folder;
         }
 
