@@ -218,12 +218,12 @@ test "writeI32 and readI32 roundtrip negative" {
 }
 
 test "decode rejects data shorter than minimum" {
-    const data = [_]u8{ 'B', 'M' } ++ [_]u8{0} ** 10;
+    const data = [_]u8{ 'B', 'M' } ++ @as([10]u8, @splat(0));
     try testing.expectError(error.InvalidBmp, decode(testing.allocator, &data));
 }
 
 test "decode rejects invalid signature" {
-    var data = [_]u8{0} ** 60;
+    var data = @as([60]u8, @splat(0));
     data[0] = 'X';
     data[1] = 'Y';
     try testing.expectError(error.InvalidBmp, decode(testing.allocator, &data));
@@ -231,7 +231,7 @@ test "decode rejects invalid signature" {
 
 test "decode rejects unsupported compression" {
     // Build a minimal BMP header with compression != 0
-    var data = [_]u8{0} ** 70;
+    var data = @as([70]u8, @splat(0));
     data[0] = 'B';
     data[1] = 'M';
     writeU32(&data, bmp_data_offset_pos, bmp_min_file_size);
@@ -243,7 +243,7 @@ test "decode rejects unsupported compression" {
 }
 
 test "decode rejects unsupported bit depth" {
-    var data = [_]u8{0} ** 70;
+    var data = @as([70]u8, @splat(0));
     data[0] = 'B';
     data[1] = 'M';
     writeU32(&data, bmp_data_offset_pos, bmp_min_file_size);
@@ -255,7 +255,7 @@ test "decode rejects unsupported bit depth" {
 }
 
 test "decode rejects zero width" {
-    var data = [_]u8{0} ** 70;
+    var data = @as([70]u8, @splat(0));
     data[0] = 'B';
     data[1] = 'M';
     writeU32(&data, bmp_data_offset_pos, bmp_min_file_size);
@@ -267,7 +267,7 @@ test "decode rejects zero width" {
 }
 
 test "decode rejects negative width" {
-    var data = [_]u8{0} ** 70;
+    var data = @as([70]u8, @splat(0));
     data[0] = 'B';
     data[1] = 'M';
     writeU32(&data, bmp_data_offset_pos, bmp_min_file_size);

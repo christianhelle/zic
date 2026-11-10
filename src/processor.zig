@@ -6,7 +6,7 @@ const Bitmap = bitmap.Bitmap;
 const bmp = @import("bmp.zig");
 const cli = @import("cli.zig");
 const format = @import("format.zig");
-const io = @import("io.zig");
+const io_util = @import("io.zig");
 const jpeg = @import("jpeg.zig");
 const png = @import("png.zig");
 
@@ -22,27 +22,28 @@ const Job = struct {
     }
 };
 
-pub fn processImages(allocator: std.mem.Allocator, args: cli.Args) !void {
-    var dir = try std.fs.cwd().openDir(
+pub fn processImages(allocator: std.mem.Allocator, io: std.Io, args: cli.Args) !void {
+    var dir = try std.Io.Dir.cwd().openDir(
+        io,
         args.input_path,
         .{ .iterate = true },
     );
-    defer dir.close();
+    defer dir.close(io);
 
-    var output_folder = try io.openOrMakeDir(args.output_path);
-    defer output_folder.close();
+    var output_folder = try io_util.openOrMakeDir(io, args.output_path);
+    defer output_folder.close(io);
 
     var jobs: std.ArrayList(Job) = .empty;
     defer jobs.deinit(allocator);
 
-    const start = std.time.nanoTimestamp();
+    const start = std.Io.Timestamp.now(io, .awake);
     std.debug.print(
         "Scanning {s} directory...\n",
         .{args.input_path},
     );
 
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (entry.kind == .file) {
             const input_path = try std.fs.path.join(
                 allocator,
@@ -92,6 +93,7 @@ pub fn processImages(allocator: std.mem.Allocator, args: cli.Args) !void {
 
         processImage(
             allocator,
+            io,
             job.input_path,
             job.output_path,
             args.options,
@@ -109,8 +111,7 @@ pub fn processImages(allocator: std.mem.Allocator, args: cli.Args) !void {
             );
         };
     }
-    const end = std.time.nanoTimestamp();
-    const elapsed_ns: i128 = end - start;
+    const elapsed_ns = start.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds;
     std.debug.print(
         "\nCompleted processing {} file(s) in {}ms\n",
         .{
@@ -122,6 +123,7 @@ pub fn processImages(allocator: std.mem.Allocator, args: cli.Args) !void {
 
 pub fn processImage(
     allocator: std.mem.Allocator,
+    io: std.Io,
     input_path: []const u8,
     output_path: []const u8,
     options: cli.Options,
@@ -137,8 +139,8 @@ pub fn processImage(
     };
 
     // Read input file
-    const cwd = std.fs.cwd();
-    const input_data = cwd.readFileAlloc(allocator, input_path, 100_000_000) catch |err| {
+    const cwd = std.Io.Dir.cwd();
+    const input_data = cwd.readFileAlloc(io, input_path, allocator, .limited(100_000_000)) catch |err| {
         std.debug.print("Error reading '{s}': {}\n", .{ input_path, err });
         return;
     };
@@ -181,7 +183,7 @@ pub fn processImage(
     defer allocator.free(output_data);
 
     // Write output
-    cwd.writeFile(.{ .sub_path = output_path, .data = output_data }) catch |err| {
+    cwd.writeFile(io, .{ .sub_path = output_path, .data = output_data }) catch |err| {
         std.debug.print("Error writing '{s}': {}\n", .{ output_path, err });
         return;
     };

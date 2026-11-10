@@ -8,12 +8,11 @@ const processor = @import("processor.zig");
 
 const std = @import("std");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
-    var args = try cli.Args.init(allocator);
+    var args = try cli.Args.init(allocator, io, init.minimal.args);
     defer args.deinit();
 
     if (args.options.version) {
@@ -33,7 +32,7 @@ pub fn main() !void {
     }
 
     if (args.isBatchMode()) {
-        try processor.processImages(allocator, args);
+        try processor.processImages(allocator, io, args);
         return;
     }
 
@@ -44,6 +43,7 @@ pub fn main() !void {
 
     processor.processImage(
         allocator,
+        io,
         args.input_path,
         args.output_path,
         args.options,
